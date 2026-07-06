@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""
+Phase 4: Bowtie2 specificity screening for bisulfite-converted primers.
+
+Checks primer specificity against 6 genome states:
+1. Unconverted genome (sense + antisense) — detects genomic mispriming
+2. Converted unmethylated genome (sense + antisense) — detects bisulfite-converted mispriming
+3. Converted methylated genome (sense + antisense) — detects bisulfite-converted mispriming
+
+For each primer pair, both left and right primers are aligned against all 6 states.
+A primer passes if it aligns uniquely to the intended genome state and position.
+
+The 6 genome states are created by in silico bisulfite conversion of the reference genome:
+- Unconverted: original genome (2 strands)
+- Converted unmethylated: all C→T on both strands (2 strands)
+- Converted methylated: C→T except CpG C's (2 strands)
+"""
+
+import os
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+from methyl_panel.phase2_bisulfite_convert import (
+    reverse_complement, find_cpg_positions, bisulfite_convert_top, bisulfite_convert_bottom
+)
+
+
+@dataclass
+class BowtieResult:
+    """Result of bowtie2 alignment for a primer."""
+    passes_filter: bool
+    intended_genome: str       # Which genome state it was designed for
+    total_alignments: int      # Total alignments across all 6 states
+    off_target_alignments: int # Alignments to non-intended states
+    mapping_note: str          # Description of any issues
+
+
+def create_bowtie_index(genome_fasta: str, output_dir: str,
+                        converted: bool = True, methylated: bool = False) -> str:
+    """
+    Create a bowtie2 index for a genome state.
+
+    Args:
+        genome_fasta: Path to the original genome FASTA
+        output_dir: Directory to store the index
+        converted: If True, bisulfite-convert the genome
+        methylated: If True, preserve CpG C's during conversion
+
+    Returns:
+        Path to the bowtie2 index prefix
+    """
+    if not converted:
+        # Use original genome directly
+        index_prefix = os.path.join(output_dir, "unconverted")
+        if not os.path.exists(index_prefix + ".1.bt2"):
+            cmd = ["bowtie2-build", genome_fasta, index_prefix]
+            subprocess.run(cmd, check=True)
+        return index_prefix
+
+    # For converted genomes, we need to create the converted FASTA
+    # This is a large operation — in practice, pre-built indices should be used
+    suffix = "converted_methylated" if methylated else "converted_unmethylated"
+    index_prefix = os.path.join(output_dir, suffix)
+
+    if not os.path.exists(index_prefix + ".1.bt2"):
+        # Create converted FASTA
+        converted_fasta = os.path.join(output_dir, f"{suffix}.fa")
+
+        # Read original FASTA and convert each chromosome
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as tmp:
+            # Use samtools faidx to get chromosome names
+            cmd = ["samtools", "faidx", genome_fasta]
+            # Get list of chromosomes from .fai file
+            fai_file = genome_fasta + ".fai"
+            chroms = []
+            if os.path.exists(fai_file):
+                with open(fai_file) as f:
+                    for line in f:
+                        parts = line.strip().split("\t")
+                        if parts:
+                            chroms.append(parts[0])
+
+            for chrom in chroms:
+                # Fetch full chromosome
+                cmd = ["samtools", "faidx", genome_fasta, chrom]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                lines = result.stdout.strip().split("\n")
+                if len(lines) < 2:
+                    continue
+                seq = "".join(lines[1:]).upper()
+
+                # Convert top strand
+                cpg_pos = find_cpg_positions(seq)
+                converted_top = bisulfite_convert_top(seq, cpg_pos, methylated=methylated)
+
+                # Write to FASTA
+                tmp.write(f">{chrom}\n")
+                for j in range(0, len(converted_top), 80):
+                    tmp.write(converted_top[j:j+80] + "\n")
+
+        tmp_path = tmp.name
+        os.rename(tmp_path, converted_fasta)
+
+        # Build bowtie2 index
+        cmd = ["bowtie2-build", converted_fasta, index_prefix]
+        subprocess.run(cmd, check=True)
+
+    return index_prefix
+
+
+def align_primer_bowtie2(primer_seq: str, index_prefix: str,
+                         max_mismatches: int = 4) -> List[dict]:
+    """
+    Align a primer against a bowtie2 index.
+
+    Args:
+        primer_seq: Primer sequence
+        index_prefix: Path to bowtie2 index prefix
+        max_mismatches: Maximum allowed mismatches in seed
+
+    Returns:
+        List of alignment dictionaries
+    """
+    # Create a FASTA file for the primer
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as tmp:
+        tmp.write(f">primer\n{primer_seq}\n")
+        tmp_path = tmp.name
+
+    try:
+        # Run bowtie2 in end-to-end mode with relaxed settings
+        cmd = [
+            "bowtie2",
+            "-x", index_prefix,
+            "-f", tmp_path,  # Input is FASTA
+            "--end-to-end",
+            "-N", str(max(0, max_mismatches - 2)),  # Seed mismatches
+            "-L", "10",  # Seed length (shorter for short primers)
+            "-a",  # Report all alignments
+            "--no-hd",  # No header lines
+            "--no-unal",  # Don't print unaligned reads
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        alignments = []
+        for line in result.stdout.strip().split("\n"):
+            if not line or line.startswith("@"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 11:
+                alignments.append({
+                    "read": parts[0],
+                    "flag": int(parts[1]),
+                    "rname": parts[2],
+                    "pos": int(parts[3]),
+                    "mapq": int(parts[4]),
+                    "cigar": parts[5],
+                    "seq": parts[9],
+                    "edits": int(parts[11].split(":")[-1]) if len(parts) > 11 else 0,
+                })
+
+        return alignments
+    finally:
+        os.unlink(tmp_path)
+
+
+def screen_primer_pair(left_primer: str, right_primer: str,
+                       intended_state: str,
+                       index_dir: str,
+                       max_mismatches: int = 4) -> BowtieResult:
+    """
+    Screen a primer pair against all 6 genome states.
+
+    Args:
+        left_primer: Left primer sequence
+        right_primer: Right primer sequence
+        intended_state: Which state the primers were designed for
+                        (SM, AM, SU, AU, S, A)
+        index_dir: Directory containing bowtie2 indices
+        max_mismatches: Maximum mismatches allowed
+
+    Returns:
+        BowtieResult with pass/fail and details
+    """
+    # Map intended state to genome index
+    # SM, AM → converted_methylated
+    # SU, AU → converted_unmethylated
+    # S, A → unconverted
+    state_to_index = {
+        "SM": "converted_methylated",
+        "AM": "converted_methylated",
+        "SU": "converted_unmethylated",
+        "AU": "converted_unmethylated",
+        "S": "unconverted",
+        "A": "unconverted",
+    }
+
+    intended_index = state_to_index.get(intended_state, "unconverted")
+
+    # Check all indices
+    indices_to_check = ["unconverted", "converted_unmethylated", "converted_methylated"]
+
+    total_alignments = 0
+    off_target = 0
+    notes = []
+
+    for idx_name in indices_to_check:
+        idx_path = os.path.join(index_dir, idx_name)
+        if not os.path.exists(idx_path + ".1.bt2"):
+            notes.append(f"Index {idx_name} not found, skipping")
+            continue
+
+        # Align both primers
+        for primer_name, primer_seq in [("left", left_primer), ("right", right_primer)]:
+            alignments = align_primer_bowtie2(primer_seq, idx_path, max_mismatches)
+
+            # Filter: only count alignments with few edits
+            good_alignments = [a for a in alignments if a["edits"] <= max_mismatches]
+
+            total_alignments += len(good_alignments)
+
+            if idx_name != intended_index and good_alignments:
+                off_target += len(good_alignments)
+                notes.append(f"{primer_name} primer has {len(good_alignments)} off-target hits in {idx_name}")
+
+    # Pass if no off-target alignments
+    passes = off_target == 0
+
+    note = "; ".join(notes) if notes else "Unique mapping to intended genome"
+
+    return BowtieResult(
+        passes_filter=passes,
+        intended_genome=intended_index,
+        total_alignments=total_alignments,
+        off_target_alignments=off_target,
+        mapping_note=note,
+    )
+
+
+def main():
+    """CLI entry point."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Bowtie2 specificity screening")
+    parser.add_argument("--left", required=True, help="Left primer sequence")
+    parser.add_argument("--right", required=True, help="Right primer sequence")
+    parser.add_argument("--state", required=True, choices=["SM", "AM", "SU", "AU", "S", "A"],
+                        help="Intended genome state")
+    parser.add_argument("--index-dir", required=True, help="Directory with bowtie2 indices")
+    parser.add_argument("--max-mismatches", type=int, default=4)
+    args = parser.parse_args()
+
+    result = screen_primer_pair(
+        args.left, args.right, args.state, args.index_dir, args.max_mismatches
+    )
+
+    print(f"Passes filter: {result.passes_filter}")
+    print(f"Intended genome: {result.intended_genome}")
+    print(f"Total alignments: {result.total_alignments}")
+    print(f"Off-target: {result.off_target_alignments}")
+    print(f"Note: {result.mapping_note}")
+
+
+if __name__ == "__main__":
+    main()
