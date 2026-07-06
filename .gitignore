@@ -6,7 +6,7 @@ venv/
 *.egg-info/
 dist/
 build/
-data/
+data/beta_files/
 results/
 *.bed
 *.beta
