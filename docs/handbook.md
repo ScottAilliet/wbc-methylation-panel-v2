@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.1.0
+**Version:** Pipeline v2.1.1
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-09
 
@@ -663,9 +663,19 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Cause:** Homebrew removed the standalone tabix formula; it's now bundled with htslib
 - **Solution:** Use `brew install htslib` instead. The install script has been fixed to use htslib.
 
-**Problem:** `zsh: permission denied: ./install_macos.sh`
-- **Cause:** The script file is not executable
-- **Solution:** Run `chmod +x install_macos.sh` first, then `./install_macos.sh`
+**Problem:** `zsh: permission denied: ./install_macos.sh` or `./download_data.sh`
+- **Cause:** The script file is not executable. This happens on first clone, and also after `git checkout --` or `git pull` resets file permissions.
+- **Solution:** Run `chmod +x install_macos.sh` (or `chmod +x download_data.sh`), then run the script again.
+
+**Problem:** `git pull` fails with "Your local changes to the following files would be overwritten by merge"
+- **Cause:** You modified a file locally (e.g. `chmod +x` changed the file, or you edited it) and the remote version also changed.
+- **Solution:** Discard your local copy and take the remote version:
+  ```bash
+  git checkout -- download_data.sh
+  git pull
+  chmod +x download_data.sh
+  ```
+  `git checkout --` replaces your local file with the last committed version. Then `git pull` gets the fix. Then `chmod +x` because `git checkout --` resets permissions.
 
 ### 7.2 Data Problems
 
@@ -843,6 +853,11 @@ open results/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.1.1 (2026-07-09)
+
+- `download_data.sh`: Fixed wget consuming stdin from the manifest file, which killed the download loop after the first iteration. The manifest is now read on file descriptor 3 and wget stdin is redirected from /dev/null.
+- Handbook: Added troubleshooting for `git pull` conflict ("Your local changes would be overwritten") and `chmod +x` needed after `git checkout --`.
 
 ### v2.1.0 (2026-07-09)
 
