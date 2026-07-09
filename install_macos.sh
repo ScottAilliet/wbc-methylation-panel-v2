@@ -34,9 +34,9 @@ echo "✓ Homebrew installed"
 # Install system dependencies
 echo ""
 echo "Installing system dependencies..."
-brew install python@3.11 samtools bowtie2 tabix bedtools
+brew install python@3.11 samtools bowtie2 htslib bedtools
 
-echo "✓ System dependencies installed (samtools, bowtie2, tabix, bedtools)"
+echo "✓ System dependencies installed (samtools, bowtie2, htslib/tabix, bedtools)"
 
 # Create virtual environment
 echo ""
@@ -90,7 +90,7 @@ echo "=========================================="
 echo -n "Python: "; python3 --version
 echo -n "samtools: "; samtools --version | head -1
 echo -n "bowtie2: "; bowtie2 --version | head -1
-echo -n "tabix: "; tabix --version | head -1
+echo -n "tabix: "; tabix --version 2>/dev/null | head -1 || echo "included with htslib/samtools"
 echo -n "primer3-py: "; python3 -c "import primer3; print(primer3.__version__)"
 echo -n "openpyxl: "; python3 -c "import openpyxl; print(openpyxl.__version__)"
 echo -n "pandas: "; python3 -c "import pandas; print(pandas.__version__)"
