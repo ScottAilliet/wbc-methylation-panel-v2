@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.1.1
+**Version:** Pipeline v2.1.2
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-09
 
@@ -687,6 +687,18 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Cause:** hg19 genome FASTA not found, not indexed, or the chromosome is not in the genome
 - **Solution:** Run `./download_data.sh` to download and index the genome. If only some chromosomes are available, blocks on missing chromosomes are automatically skipped.
 
+**Problem:** hg19 genome download fails or `wgbstools init_genome` fails
+- **Cause:** wgbstools `init_genome` may fail on some macOS configurations. The download script now downloads hg19 directly from UCSC instead.
+- **Solution:** Re-run `./download_data.sh` after `git pull`. If it still fails, download manually:
+  ```bash
+  wget -O data/hg19/hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz
+  samtools faidx data/hg19/hg19.fa.gz
+  ```
+
+**Problem:** dbSNP download fails with 404 Not Found
+- **Cause:** NCBI reorganized the dbSNP FTP paths. The file is now `00-common_all.vcf.gz` (with `00-` prefix), not `common_all.vcf.gz`.
+- **Solution:** Re-run `./download_data.sh` after `git pull`. The URL has been corrected.
+
 **Problem:** `File truncated at line 1` when indexing genome
 - **Cause:** The FASTA file was compressed with gzip instead of bgzip
 - **Solution:** `gunzip -c file.fa.gz | bgzip -c > file.fa.bgz && mv file.fa.bgz file.fa.gz && samtools faidx file.fa.gz`
@@ -853,6 +865,12 @@ open results/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.1.2 (2026-07-09)
+
+- `download_data.sh`: Fixed dbSNP URL — NCBI renamed `common_all.vcf.gz` to `00-common_all.vcf.gz`. Now downloads pre-built `.tbi` tabix index from NCBI instead of building it locally.
+- `download_data.sh`: Fixed hg19 genome download — replaced wgbstools `init_genome` (which fails silently on some macOS configs) with direct download from UCSC (`hg19.fa.gz`, ~900 MB). Includes automatic bgzip recompression if needed.
+- Handbook: Added troubleshooting for dbSNP 404 and hg19/wgbstools init_genome failure.
 
 ### v2.1.1 (2026-07-09)
 

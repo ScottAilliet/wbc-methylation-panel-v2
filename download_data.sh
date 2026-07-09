@@ -128,15 +128,23 @@ echo "=== 3. Downloading hg19 genome ==="
 GENOME_DIR="$DATA_DIR/hg19"
 mkdir -p "$GENOME_DIR"
 
-if [ ! -f "$GENOME_DIR/hg19.fa.gz" ]; then
-    echo "  Initializing hg19 via wgbstools..."
-    python3 -c "
-import sys
-sys.path.insert(0, 'wgbs_tools/src/python')
-from init_genome import init_genome
-init_genome('hg19')
-" 2>/dev/null || echo "  (Run 'wgbstools init_genome hg19' manually if needed)"
-    echo "✓ hg19 genome ready"
+if [ ! -f "$GENOME_DIR/hg19.fa.gz" ] || [ ! -f "$GENOME_DIR/hg19.fa.gz.fai" ]; then
+    echo "  Downloading hg19 from UCSC (~900 MB compressed)..."
+    wget -O "$GENOME_DIR/hg19.fa.gz" \
+        "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz"
+    if [ -s "$GENOME_DIR/hg19.fa.gz" ]; then
+        echo "  Indexing genome with samtools faidx..."
+        samtools faidx "$GENOME_DIR/hg19.fa.gz" 2>/dev/null || {
+            echo "  samtools faidx failed (file may be gzip not bgzip), recompressing..."
+            gunzip -c "$GENOME_DIR/hg19.fa.gz" | bgzip -c > "$GENOME_DIR/hg19.fa.bgz"
+            mv "$GENOME_DIR/hg19.fa.bgz" "$GENOME_DIR/hg19.fa.gz"
+            samtools faidx "$GENOME_DIR/hg19.fa.gz"
+        }
+        echo "✓ hg19 genome downloaded and indexed"
+    else
+        echo "✗ ERROR: hg19 download failed"
+        rm -f "$GENOME_DIR/hg19.fa.gz"
+    fi
 else
     echo "✓ hg19 genome already exists"
 fi
@@ -145,13 +153,19 @@ fi
 echo ""
 echo "=== 4. Downloading dbSNP common variants ==="
 DBSNP="$DATA_DIR/dbsnp_common.vcf.gz"
-if [ ! -f "$DBSNP" ]; then
+if [ ! -f "$DBSNP" ] || [ ! -f "$DBSNP.tbi" ]; then
     echo "  Downloading dbSNP common variants (MAF ≥ 1%)..."
     echo "  This is a large file (~10 GB) — please be patient..."
     wget -O "$DBSNP" \
-        "https://ftp.ncbi.nlm.nih.gov/snp/organisms/human_9606_b151_GRCh37p13/VCF/common_all.vcf.gz"
+        "https://ftp.ncbi.nlm.nih.gov/snp/organisms/human_9606_b151_GRCh37p13/VCF/00-common_all.vcf.gz"
     if [ -s "$DBSNP" ]; then
-        tabix -p vcf "$DBSNP" 2>/dev/null || true
+        # Download pre-built tabix index if available
+        wget -q -O "$DBSNP.tbi" \
+            "https://ftp.ncbi.nlm.nih.gov/snp/organisms/human_9606_b151_GRCh37p13/VCF/00-common_all.vcf.gz.tbi"
+        if [ ! -s "$DBSNP.tbi" ]; then
+            echo "  Building tabix index (this takes a few minutes)..."
+            tabix -p vcf "$DBSNP" 2>/dev/null || echo "  (tabix indexing failed — SNP screening will not work)"
+        fi
         echo "✓ dbSNP downloaded"
     else
         echo "✗ ERROR: dbSNP download failed"
