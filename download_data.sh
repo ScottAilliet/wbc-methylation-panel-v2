@@ -70,7 +70,7 @@ SKIPPED=0
 # can't always construct the URL from the manifest. Instead, we fetch
 # the directory listing for each GSM and download the first .beta file
 # that isn't an hg38 version.
-while IFS=, read -r gsm title cell_type fname need_download; do
+while IFS=, read -r gsm title cell_type fname need_download <&3; do
     [ "$gsm" = "gsm" ] && continue  # Skip header
     COUNT=$((COUNT + 1))
 
@@ -83,7 +83,7 @@ while IFS=, read -r gsm title cell_type fname need_download; do
 
     # Fetch directory listing for this GSM
     GSM_PREFIX=$(echo "$gsm" | sed 's/...$/nnn/')
-    LISTING=$(wget -q -O - "https://ftp.ncbi.nlm.nih.gov/geo/samples/${GSM_PREFIX}/${gsm}/suppl/" 2>/dev/null)
+    LISTING=$(wget -q -O - "https://ftp.ncbi.nlm.nih.gov/geo/samples/${GSM_PREFIX}/${gsm}/suppl/" 2>/dev/null </dev/null)
 
     if [ -z "$LISTING" ]; then
         echo "[$COUNT/$TOTAL] FAIL: $gsm ($cell_type) — could not reach FTP"
@@ -101,7 +101,7 @@ while IFS=, read -r gsm title cell_type fname need_download; do
     fi
 
     OUTFILE="$BETA_DIR/$ACTUAL_FNAME"
-    wget -q -O "$OUTFILE" "https://ftp.ncbi.nlm.nih.gov/geo/samples/${GSM_PREFIX}/${gsm}/suppl/$ACTUAL_FNAME" 2>/dev/null
+    wget -q -O "$OUTFILE" "https://ftp.ncbi.nlm.nih.gov/geo/samples/${GSM_PREFIX}/${gsm}/suppl/$ACTUAL_FNAME" 2>/dev/null </dev/null
 
     if [ -s "$OUTFILE" ]; then
         echo "[$COUNT/$TOTAL] OK: $ACTUAL_FNAME"
@@ -117,7 +117,7 @@ while IFS=, read -r gsm title cell_type fname need_download; do
         sleep 1
     fi
 
-done < "$MANIFEST"
+done 3< "$MANIFEST"
 
 echo ""
 echo "✓ Beta files: $OK downloaded, $SKIPPED already present, $FAILED failed (out of $TOTAL)"
