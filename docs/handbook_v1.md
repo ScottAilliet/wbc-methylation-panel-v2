@@ -1,8 +1,8 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.1.0
+**Version:** Pipeline v2.0.0
 **Repository:** `wbc-methylation-panel-v2`
-**Last updated:** 2026-07-09
+**Last updated:** 2026
 
 ---
 
@@ -11,16 +11,6 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
-
-### What Changed from v1
-
-This handbook (v2.1.0) replaces the previous version (saved as `handbook_v1.md`). Key changes:
-
-1. **DMR input file:** The pipeline now uses `WBC_Panel_Top200_v7.9.xlsx` (the output of the DMR discovery pipeline) instead of a non-existent `DMR_percpg_full_atlas_all_cell_types.xlsx`. The loader auto-detects the format.
-2. **Cell type IDs:** Both short IDs (`MONO`, `BCELL`) and sheet names (`Mono`, `B`) are accepted.
-3. **Genome path:** Default changed to `data/hg19/hg19.fa.gz`.
-4. **Bug fixes:** `PipelineConfig` missing fields fixed, `download_data.sh` NCBI truncation fixed, `install_macos.sh` tabix→htslib fixed.
-5. **Error handling:** Blocks on chromosomes not in the genome are now skipped gracefully instead of crashing.
 
 ### Who This Handbook Is For
 
@@ -83,10 +73,10 @@ Options (flags) always start with a dash. `-l` means "long format", `-a` means "
 **Moving between folders:**
 
 ```bash
-cd Documents
-cd ..
-cd ~
-cd /Users/scottailliet/wbc-methylation-panel-v2
+cd Documents          # Move into the Documents folder
+cd ..                 # Go up one level
+cd ~                  # Go back to your home folder
+cd /Users/scottailliet/wbc-methylation-panel-v2  # Jump to a specific folder
 ```
 
 **Pro tip:** Type the first few letters of a folder name, then press **Tab** — the terminal auto-completes it. This saves time and prevents typos.
@@ -102,8 +92,16 @@ This pipeline uses a Python **virtual environment** (`.venv`) instead of conda. 
 **Creating and using it:**
 
 ```bash
+# Create the virtual environment (done once by install_macos.sh)
 python3.11 -m venv .venv
+
+# Activate it (every time you open a new Terminal)
 source .venv/bin/activate
+
+# Your prompt changes to show you're in the environment:
+(.venv) scott@MacBook-Pro wbc-methylation-panel-v2 %
+
+# Deactivate (exit the environment)
 deactivate
 ```
 
@@ -115,20 +113,18 @@ deactivate
 
 The `install_macos.sh` script handles everything automatically. It installs:
 - **Homebrew** (Mac package manager) — if not already installed
-- **System tools:** samtools, bowtie2, htslib (includes tabix), bedtools
+- **System tools:** samtools, bowtie2, tabix, bedtools
 - **Python packages:** primer3-py, openpyxl, pandas, numpy, reportlab, pysam
 - **wgbstools** (from GitHub source — not on PyPI)
 
 ```bash
-chmod +x install_macos.sh
-./install_macos.sh
+chmod +x install_macos.sh    # Make the script executable (one-time)
+./install_macos.sh           # Run it
 ```
 
 `chmod +x` means "make this file executable" — you only do this once. `./` means "run the file in this folder."
 
 > **If you get "permission denied":** You forgot `chmod +x`. Run `chmod +x install_macos.sh` first, then `./install_macos.sh`.
-
-> **If you get "command not found: #":** You pasted a `#` comment line from this handbook. Lines starting with `#` are explanations, not commands. Only paste lines that do NOT start with `#`.
 
 ---
 
@@ -138,7 +134,7 @@ chmod +x install_macos.sh
 
 ```bash
 python -m methyl_panel.pipeline --steps all \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
     --output-dir results/
@@ -184,16 +180,13 @@ python -m methyl_panel.pipeline --help
 | Typo in a command | "Command not found" | Use Tab-completion; copy-paste from this handbook |
 | Wrong file path | "No such file or directory" | Check with `ls`; use absolute paths if unsure |
 | Missing Tm values | "Tm values are REQUIRED" error | Always provide `--min-tm`, `--opt-tm`, `--max-tm` |
-| Pasting `#` comment lines | `zsh: command not found: #` | Only paste lines without `#` |
-| Forgot `chmod +x` | "permission denied" | Run `chmod +x` on the script first |
-| Stuck at `quote>` prompt | Pasted a line with an apostrophe | Press Ctrl-C to cancel, re-run the command |
 
 ---
 
 ### 0.8 Quick Reference: The 5 Commands You Will Use Most
 
 | Command | What it does | When to use it |
-|---------|----------------|----------------|
+|---------|-------------|----------------|
 | `source .venv/bin/activate` | Enter the pipeline environment | Every time you open a new Terminal |
 | `./install_macos.sh` | Install all dependencies | First time only |
 | `./download_data.sh` | Download all data (~15 GB) | First time only |
@@ -235,14 +228,19 @@ This takes about 10–15 minutes depending on your internet speed.
 ### 1.3 Verify the Installation
 
 ```bash
+# Activate the environment
 source .venv/bin/activate
 
+# Check that the pipeline module loads
 python -c "from methyl_panel.pipeline import main; print('Pipeline OK')"
 
+# Check primer3
 python -c "import primer3; print(f'primer3-py {primer3.__version__}')"
 
+# Check bowtie2
 bowtie2 --version | head -1
 
+# Check samtools
 samtools --version | head -1
 ```
 
@@ -261,17 +259,19 @@ The pipeline requires:
 | GSE186458 beta files (207 samples) | ~2.4 GB | WGBS methylation data for DMR discovery |
 | GSE186458 blocks file | ~1 MB | Genomic block definitions (205 CpG blocks) |
 | hg19 genome FASTA | ~3 GB | Reference genome for sequence fetching |
-| dbSNP common variants VCF | ~10 GB | SNP screening (Step 6) |
-| Bowtie2 indices | ~4 GB | Specificity screening (Step 4) |
+| dbSNP common variants VCF | ~10 GB | SNP screening (Phase 6) |
+| Bowtie2 indices | ~4 GB | Specificity screening (Phase 4) |
 
 **Total: ~15–20 GB**
 
 ### 2.2 Download Everything
 
 ```bash
+# Make sure you're in the repo folder and the environment is active
 cd ~/wbc-methylation-panel-v2
 source .venv/bin/activate
 
+# Download all data
 chmod +x download_data.sh
 ./download_data.sh
 ```
@@ -285,26 +285,15 @@ This downloads:
 
 **This takes 30–60 minutes** depending on your internet speed. The script skips files that are already downloaded, so you can re-run it if the download is interrupted.
 
-> **Note:** The download script uses `wget -q` (quiet mode) for beta files, so there are no progress bars. You will see `[$COUNT/$TOTAL] OK:` lines as each file downloads. The dbSNP download (~10 GB) shows a progress bar.
-
-### 2.3 The DMR Input File
-
-The pipeline reads DMR blocks from an Excel file. The default is:
-
-```
-data/WBC_Panel_Top200_v7.9.xlsx
-```
-
-This file contains 7 cell-type sheets (CD4T, CD8T, B, NK, Mono, Gran, Blood-T-CD3), each with 105–196 DMR blocks including per-CpG methylation data, genomic coordinates, gene annotations, and cleanliness scores.
-
-**If you don't have this file:** It is the output of the DMR discovery pipeline (repo 1, `wbc-methylation-panel`). You can also generate it by running `wgbstools find_markers` with the downloaded beta files and blocks file. See the [Materials and Methods](materials_and_methods.md) for details.
-
-### 2.4 If You Already Have Some Data
+### 2.3 If You Already Have Some Data
 
 If you already have beta files or the blocks file from a previous project, you can copy them into the right locations:
 
 ```bash
+# Beta files go in data/beta_files/
 cp /path/to/your/beta_files/*.beta data/beta_files/
+
+# Blocks file goes in data/
 cp /path/to/GSE186458_blocks.s205.bed.gz data/
 ```
 
@@ -316,21 +305,17 @@ Then run `./download_data.sh` — it will skip what you already have and downloa
 
 ### 3.1 The 9 Pipeline Steps
 
-| Step | Module | What it does | Needs full genome? |
-|------|--------|-------------|-------------------|
-| 1 | `phase1_dmr_loader` | Load DMR blocks from the Excel file | No |
-| 2 | `phase2_bisulfite_convert` | Bisulfite-convert genomic sequences to 6 strands | Yes (samtools faidx) |
-| 3 | `phase3_primer3_design` | Design primers with Primer3 | No (uses step 2 output) |
-| 4 | `phase4_bowtie_specificity` | Screen primers against 6 genome states with bowtie2 | Yes (bowtie2 indices) |
-| 5 | `phase5_structure` | Screen for hairpin secondary structures | No |
-| 6 | `phase6_snp` | Screen for common SNPs (dbSNP, MAF ≥ 1%) | Yes (dbSNP VCF) |
-| 7 | `phase7_dimer` | Predict primer-dimer formation (DimerDetective) | No |
-| 8 | `output_xlsx` | Generate U-assays-style Excel output (27 columns) | No |
-| 9 | `output_pdf` | Generate U-assays-style PDF (one page per primer pair) | No |
-
-**Steps that work without the full data download:** 1, 2, 3, 5, 7, 8, 9 (need only the DMR Excel + hg19 genome)
-
-**Steps that need the full data download:** 4 (bowtie2 indices), 6 (dbSNP VCF)
+| Step | Module | What it does |
+|------|--------|-------------|
+| 1 | `phase1_dmr_loader` | Load DMR blocks from the Excel file |
+| 2 | `phase2_bisulfite_convert` | Bisulfite-convert genomic sequences to 6 strands |
+| 3 | `phase3_primer3_design` | Design primers with Primer3 (all 161 Primer3Plus parameters) |
+| 4 | `phase4_bowtie_specificity` | Screen primers against 6 genome states with bowtie2 |
+| 5 | `phase5_structure` | Screen for hairpin secondary structures |
+| 6 | `phase6_snp` | Screen for common SNPs (dbSNP, MAF ≥ 1%) |
+| 7 | `phase7_dimer` | Predict primer-dimer formation (DimerDetective) |
+| 8 | `output_xlsx` | Generate U-assays-style Excel output (27 columns) |
+| 9 | `output_pdf` | Generate U-assays-style PDF (one page per primer pair) |
 
 ### 3.2 Running All Steps
 
@@ -338,15 +323,15 @@ Then run `./download_data.sh` — it will skip what you already have and downloa
 source .venv/bin/activate
 
 python -m methyl_panel.pipeline --steps all \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
     --output-dir results/
 ```
 
 **Required arguments:**
-- `--dmr-xlsx`: Path to the DMR Excel file (default: `data/WBC_Panel_Top200_v7.9.xlsx`)
-- `--genome`: Path to the hg19 genome FASTA (can be `.gz`; default: `data/hg19/hg19.fa.gz`)
+- `--dmr-xlsx`: Path to the DMR per-CpG Excel file
+- `--genome`: Path to the hg19 genome FASTA (can be `.gz`)
 - `--min-tm`, `--opt-tm`, `--max-tm`: Tm range in °C — **required, no defaults**
 
 **Optional arguments:**
@@ -355,48 +340,36 @@ python -m methyl_panel.pipeline --steps all \
 - `--settings`: Load Primer3Plus settings from a file
 - `--flank`: Flanking bp around each DMR (default: 100)
 - `--max-blocks`: Limit number of blocks (for testing)
-- `--min-cpg`: Minimum CpGs per block (default: 5)
-- `--bowtie-index-dir`: Directory with bowtie2 indices (for Step 4)
-- `--dbsnp`: Path to dbSNP VCF (for Step 6)
+- `--bowtie-index-dir`: Directory with bowtie2 indices (for Phase 4)
+- `--dbsnp`: Path to dbSNP VCF (for Phase 6)
 
-### 3.3 Running Without Bowtie2 and dbSNP
-
-If you haven't downloaded the bowtie2 indices or dbSNP VCF yet, you can still run steps 1, 2, 3, 5, 7, 8, 9:
-
-```bash
-python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
-    --genome data/hg19/hg19.fa.gz \
-    --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --output-dir results/
-```
-
-The bowtie_passes_filter and common_variant_score columns will be NULL in the output. You can run steps 4 and 6 later once the data is downloaded.
-
-### 3.4 Running Specific Steps
+### 3.3 Running Specific Steps
 
 You can run any combination of steps. This is useful for re-running just the QC steps after changing parameters:
 
 ```bash
+# Run only primer design (steps 1-3), skip QC
 python -m methyl_panel.pipeline --steps 1,2,3 \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62
 
+# Re-run only QC steps on existing primers
 python -m methyl_panel.pipeline --steps 5,7 \
     --output-dir results/
 
+# Run only output generation
 python -m methyl_panel.pipeline --steps 8,9 \
     --output-dir results/
 ```
 
 Each step reads from and writes to JSON files in the output directory, so steps can be run independently as long as the prerequisite JSON files exist.
 
-### 3.5 Running a Single Cell Type
+### 3.4 Running a Single Cell Type
 
 ```bash
-python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+python -m methyl_panel.pipeline --steps all \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
     --cell-type CD8T \
@@ -405,36 +378,17 @@ python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
 
 Cell type IDs:
 
-| Cell type | ID | Sheet name in v7.9 Excel |
-|-----------|-----|--------------------------|
-| Monocytes | `MONO` | Mono |
-| B cells | `BCELL` | B |
-| NK cells | `NK` | NK |
-| Granulocytes | `GRAN` | Gran |
-| CD3 T cells (pan-T) | `CD3T` | Blood-T-CD3 |
-| CD8 T cells | `CD8T` | CD8T |
-| CD4 T cells | `CD4T` | CD4T |
+| Cell type | ID |
+|-----------|-----|
+| Monocytes | `MONO` |
+| B cells | `BCELL` |
+| NK cells | `NK` |
+| Granulocytes | `GRAN` |
+| CD3 T cells (pan-T) | `CD3T` |
+| CD8 T cells | `CD8T` |
+| CD4 T cells | `CD4T` |
 
-Both the short ID and the sheet name are accepted (e.g. `--cell-type MONO` and `--cell-type Mono` both work).
-
-### 3.6 Running All 7 Cell Types
-
-To run all 7 immune cell types, run the pipeline 7 times with a different `--cell-type` each time:
-
-```bash
-for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
-    python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-        --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
-        --genome data/hg19/hg19.fa.gz \
-        --min-tm 58 --opt-tm 60 --max-tm 62 \
-        --cell-type $CT \
-        --output-dir results/$CT/
-done
-```
-
-Each cell type's results are saved in its own subdirectory (`results/MONO/`, `results/BCELL/`, etc.).
-
-### 3.7 Choosing Tm Values
+### 3.5 Choosing Tm Values
 
 The Tm range is **required** — the pipeline refuses to run without it. This forces an explicit decision about the Tm window for each run.
 
@@ -446,35 +400,19 @@ The Tm range is **required** — the pipeline refuses to run without it. This fo
 
 To use Roche DLC salt conditions, load from a Primer3Plus settings file that has the Roche preset, or modify the salt parameters in `config.py`.
 
-### 3.8 Using a Primer3Plus Settings File
+### 3.6 Using a Primer3Plus Settings File
 
 If you have a Primer3Plus settings file (exported from the Primer3Plus web interface):
 
 ```bash
 python -m methyl_panel.pipeline --steps all \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --settings Primer3Plus_Settings.txt \
     --output-dir results/
 ```
 
 The settings file overrides all Primer3 parameters, including Tm. If the settings file has Tm values, you don't need `--min-tm` etc.
-
-### 3.9 Testing with a Small Subset
-
-To test the pipeline quickly without processing all blocks:
-
-```bash
-python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
-    --genome data/hg19/hg19.fa.gz \
-    --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --cell-type MONO \
-    --max-blocks 5 \
-    --output-dir results/test/
-```
-
-`--max-blocks 5` processes only the first 5 blocks that have sequences available in the genome. This is useful for verifying the pipeline works before running the full set.
 
 ---
 
@@ -496,7 +434,7 @@ After running the pipeline, the output directory contains:
 
 | # | Column | Description |
 |---|--------|-------------|
-| 1 | `assay_id` | Unique assay identifier (e.g. MONO_0001_001) |
+| 1 | `assay_id` | Unique assay identifier (e.g. MONO_0001_M_001) |
 | 2 | `seq_id` | Source DMR block ID |
 | 3 | `template_used` | Which bisulfite strand was used (SM, AM, SU, AU) |
 | 4 | `assay` | Assay type: M (methylated) or U (unmethylated) |
@@ -515,11 +453,11 @@ After running the pipeline, the output directory contains:
 | 17 | `sense_unmeth_mismatch_score` | Mismatches vs sense unmethylated strand |
 | 18 | `anti_meth_mismatch_score` | Mismatches vs antisense methylated strand |
 | 19 | `anti_unmeth_mismatch_score` | Mismatches vs antisense unmethylated strand |
-| 20 | `bowtie_passes_filter` | TRUE if unique mapping (Step 4) |
+| 20 | `bowtie_passes_filter` | TRUE if unique mapping (Phase 4) |
 | 21 | `bowtie_intended_genome` | Which genome state the primer targets |
-| 22 | `left_structure_mfe_kcal_mol` | Left primer hairpin MFE (Step 5) |
+| 22 | `left_structure_mfe_kcal_mol` | Left primer hairpin MFE (Phase 5) |
 | 23 | `right_structure_mfe_kcal_mol` | Right primer hairpin MFE |
-| 24 | `primer_dimer_prediction` | Dimer risk tier: high, medium, low (Step 7) |
+| 24 | `primer_dimer_prediction` | Dimer risk tier: high, medium, low (Phase 7) |
 | 25 | `primer_dimer_end_min_dg` | Minimum end stability ΔG (kcal/mol) |
 | 26 | `common_variant_score` | SNP score: 00=clean, 10=body SNP, 01=3' SNP, 11=both |
 | 27 | `mapping_error_note` | Notes on bowtie mapping results |
@@ -536,17 +474,17 @@ Each page of the PDF contains:
 
 ### 4.4 Interpreting QC Results
 
-**Bowtie specificity (Step 4):**
+**Bowtie specificity (Phase 4):**
 - `bowtie_passes_filter = TRUE`: Primer aligns uniquely to the intended genome state with no off-target hits
 - `bowtie_passes_filter = FALSE`: Off-target alignments found — primer may amplify unintended regions
 - `NULL`: Bowtie indices not available — screening was skipped
 
-**Secondary structure (Step 5):**
+**Secondary structure (Phase 5):**
 - MFE ≥ −1.5 kcal/mol: PASS (no stable hairpin)
 - MFE < −1.5 kcal/mol: FAIL (stable hairpin may form, reducing PCR efficiency)
 - More negative = more stable = worse
 
-**Primer-dimer (Step 7, DimerDetective):**
+**Primer-dimer (Phase 7, DimerDetective):**
 - `low`: end_min_dg > −0.18 kcal/mol — no dimer risk
 - `medium`: −2.48 < end_min_dg ≤ −0.18 — mixed zone, may form dimers
 - `high`: end_min_dg ≤ −2.48 kcal/mol — high dimer risk
@@ -554,20 +492,12 @@ Each page of the PDF contains:
 
 > **Bisulfite caveat:** DimerDetective was validated on 40–60% GC primers. Bisulfite MSP primers typically have 10–25% GC, outside the validation range. Treat dimer predictions as indicative, not definitive.
 
-**Common SNPs (Step 6):**
+**Common SNPs (Phase 6):**
 - Score `00`: No common SNPs in primer — clean
 - Score `10`: SNP in primer body (not at 3' end) — moderate risk
 - Score `01`: SNP in 3' end (last 5 nt) — high risk, may disrupt primer binding
 - Score `11`: SNP in both body and 3' end — highest risk
 - `NULL`: dbSNP VCF not available — screening was skipped
-
-### 4.5 M-assays vs U-assays
-
-The pipeline designs primers on 4 bisulfite-converted templates:
-- **Methylated (M assays):** from SM (sense methylated) or AM (antisense methylated) — CpG C's are preserved
-- **Unmethylated (U assays):** from SU (sense unmethylated) or AU (antisense unmethylated) — all C's converted to T
-
-For hypomethylated DMRs (the target cell type has low methylation), most primers will be M-assays. This is expected: the methylated templates retain CpG sites that provide the sequence variation needed for Primer3 to design primers within the Tm window. The unmethylated templates become very AT-rich (all C→T), making it harder for Primer3 to find suitable primers.
 
 ---
 
@@ -652,46 +582,26 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Solution:** `brew install python@3.11`
 
 **Problem:** `ModuleNotFoundError: No module named 'methyl_panel'`
-- **Cause:** Virtual environment not activated, or not in the repo folder
+- **Cause:** Virtual environment not activated, or pipeline not installed
 - **Solution:** Run `source .venv/bin/activate` from the repo folder
 
 **Problem:** `ModuleNotFoundError: No module named 'primer3'`
 - **Cause:** primer3-py not installed in the virtual environment
 - **Solution:** `pip install primer3-py==2.3.0`
 
-**Problem:** `brew install tabix` fails — "No available formula with the name 'tabix'"`
-- **Cause:** Homebrew removed the standalone tabix formula; it's now bundled with htslib
-- **Solution:** Use `brew install htslib` instead. The install script has been fixed to use htslib.
-
-**Problem:** `zsh: permission denied: ./install_macos.sh`
-- **Cause:** The script file is not executable
-- **Solution:** Run `chmod +x install_macos.sh` first, then `./install_macos.sh`
-
 ### 7.2 Data Problems
 
-**Problem:** `FileNotFoundError: data/WBC_Panel_Top200_v7.9.xlsx`
+**Problem:** `FileNotFoundError: data/DMR_percpg_full_atlas_all_cell_types.xlsx`
 - **Cause:** The DMR Excel file is not in the `data/` folder
-- **Solution:** This file is the output of the DMR discovery pipeline (repo 1). Copy it to `data/` or generate it by running `wgbstools find_markers`.
+- **Solution:** This file is generated by the DMR discovery step (wgbstools find_markers). If you don't have it, you need to run DMR discovery first, or obtain it from a colleague.
 
 **Problem:** `samtools faidx failed` or `No sequence returned`
-- **Cause:** hg19 genome FASTA not found, not indexed, or the chromosome is not in the genome
-- **Solution:** Run `./download_data.sh` to download and index the genome. If only some chromosomes are available, blocks on missing chromosomes are automatically skipped.
-
-**Problem:** `File truncated at line 1` when indexing genome
-- **Cause:** The FASTA file was compressed with gzip instead of bgzip
-- **Solution:** `gunzip -c file.fa.gz | bgzip -c > file.fa.bgz && mv file.fa.bgz file.fa.gz && samtools faidx file.fa.gz`
+- **Cause:** hg19 genome FASTA not found or not indexed
+- **Solution:** Run `./download_data.sh` to download and index the genome. Or run `samtools faidx data/hg19/hg19.fa.gz` manually.
 
 **Problem:** Beta file download fails for some samples
-- **Cause:** NCBI FTP server may be slow or unavailable, or filenames are truncated
-- **Solution:** Re-run `./download_data.sh` — it skips files that are already downloaded and uses directory listing to find truncated filenames
-
-**Problem:** `zsh: command not found: #`
-- **Cause:** You pasted a `#` comment line from this handbook
-- **Solution:** Only paste lines that do NOT start with `#`. The `#` lines are explanations.
-
-**Problem:** Terminal shows `quote>` and seems stuck
-- **Cause:** You pasted a line containing an apostrophe (like "you're"), and zsh is waiting for a closing quote
-- **Solution:** Press Ctrl-C to cancel, then re-run the command without the comment line
+- **Cause:** NCBI FTP server may be slow or unavailable
+- **Solution:** Re-run `./download_data.sh` — it skips files that are already downloaded
 
 ### 7.3 Pipeline Problems
 
@@ -703,10 +613,6 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Cause:** The DMR block doesn't have enough CpGs, or the sequence is too short, or no primers passed Primer3's filters
 - **Solution:** Try widening the Tm range, or increasing `--flank` (default 100), or lowering `--min-cpg`
 
-**Problem:** `Skipping X (chrN): samtools faidx failed`
-- **Cause:** The chromosome is not in your genome FASTA file
-- **Solution:** This is expected if you don't have the full hg19 genome. The pipeline skips these blocks and continues with the ones it can fetch. Download the full genome with `./download_data.sh` to process all blocks.
-
 **Problem:** Bowtie screening shows `NULL` for all primers
 - **Cause:** Bowtie2 indices not found in the specified directory
 - **Solution:** Provide `--bowtie-index-dir` pointing to the directory with indices, or run `./download_data.sh` to build them
@@ -716,12 +622,8 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Solution:** Provide `--dbsnp data/dbsnp_common.vcf.gz` (downloaded by `download_data.sh`)
 
 **Problem:** Pipeline is slow
-- **Cause:** Processing all blocks × 4 templates is computationally intensive
+- **Cause:** Processing all 207 samples × 300 markers × 4 templates is computationally intensive
 - **Solution:** Use `--cell-type` to process one cell type at a time, or `--max-blocks 10` for testing
-
-**Problem:** All primers are M-assays (no U-assays)
-- **Cause:** This is expected for hypomethylated DMRs. The unmethylated templates (SU/AU) are very AT-rich after bisulfite conversion, making it difficult for Primer3 to design primers within the Tm window.
-- **Solution:** This is normal behavior, not an error. If you need U-assays, try widening the Tm range or increasing `--flank`.
 
 ---
 
@@ -731,9 +633,9 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 wbc-methylation-panel-v2/
 ├── methyl_panel/                    # Python package
 │   ├── __init__.py                  # Package init (version 2.0.0)
-│   ├── config.py                    # Primer3PlusConfig (181 params) + PipelineConfig
+│   ├── config.py                    # Primer3PlusConfig (161 params) + PipelineConfig
 │   ├── pipeline.py                  # CLI entry point (9 steps)
-│   ├── phase1_dmr_loader.py         # Step 1: Load DMR blocks from Excel (v7.9 + Block_Summary)
+│   ├── phase1_dmr_loader.py         # Step 1: Load DMR blocks from Excel
 │   ├── phase2_bisulfite_convert.py  # Step 2: Bisulfite convert to 6 strands
 │   ├── phase3_primer3_design.py     # Step 3: Primer3 primer design
 │   ├── phase4_bowtie_specificity.py # Step 4: 6-strand bowtie2 screening
@@ -743,14 +645,12 @@ wbc-methylation-panel-v2/
 │   ├── output_xlsx.py               # Step 8: U-assays-style Excel output
 │   └── output_pdf.py                # Step 9: U-assays-style PDF output
 ├── data/                            # Data files
-│   ├── WBC_Panel_Top200_v7.9.xlsx   # DMR blocks (7 cell types, per-CpG methylation)
 │   ├── full_atlas_manifest.csv      # 207 sample download manifest
 │   ├── full_atlas_groups.csv        # Full atlas cell type groups (82 types)
 │   ├── immune_groups.csv            # Immune cell type groups (7 types)
 │   └── download_list_nonimmune.csv  # Non-immune sample download list
 ├── docs/
-│   ├── handbook.md                  # This document (v2.1.0)
-│   ├── handbook_v1.md               # Previous handbook version (preserved)
+│   ├── handbook.md                  # This document
 │   └── materials_and_methods.md     # Scientific methods reference
 ├── install_macos.sh                 # macOS installation script
 ├── download_data.sh                 # Data download script (~15 GB)
@@ -785,83 +685,41 @@ Dataset: [GSE186458](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE18645
 | **U-assays** | The output format (XLSX + PDF) matching the reference assay tracking format |
 | **wgbstools** | Tools for analyzing whole-genome bisulfite sequencing data |
 | **Beta file** | Binary methylation data file (2 bytes per CpG: methylated count + total count) |
-| **bgzip** | Block-compressed gzip — required by samtools faidx (not regular gzip) |
 
 ---
 
 ## Appendix B — Quick Start (Copy-Paste)
 
 ```bash
+# 1. Clone and install
 git clone https://github.com/ScottAilliet/wbc-methylation-panel-v2.git
 cd wbc-methylation-panel-v2
 chmod +x install_macos.sh
 ./install_macos.sh
-```
 
-```bash
+# 2. Download data (~15 GB, 30-60 min)
 chmod +x download_data.sh
 ./download_data.sh
-```
 
-```bash
+# 3. Activate environment
 source .venv/bin/activate
-```
 
-```bash
-python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+# 4. Run the pipeline (all steps, all cell types)
+python -m methyl_panel.pipeline --steps all \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
     --output-dir results/
-```
 
-```bash
-python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
+# 5. Or run a single cell type
+python -m methyl_panel.pipeline --steps all \
+    --dmr-xlsx data/DMR_percpg_full_atlas_all_cell_types.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
     --cell-type CD8T \
     --output-dir results/CD8T/
-```
 
-```bash
-for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
-    python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
-        --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
-        --genome data/hg19/hg19.fa.gz \
-        --min-tm 58 --opt-tm 60 --max-tm 62 \
-        --cell-type $CT \
-        --output-dir results/$CT/
-done
-```
-
-```bash
+# 6. Check results
 open results/primer_assays.xlsx
 open results/primer_assays.pdf
 ```
-
----
-
-## Appendix C — Change Log
-
-### v2.1.0 (2026-07-09)
-
-**Code fixes:**
-- `phase1_dmr_loader.py`: Rewritten to auto-detect and load v7.9 Excel format (one sheet per cell type). Added cell type ID mapping (Mono→MONO, B→BCELL, etc.). Fallback CpG position distribution when `block_cpg_coords` is missing.
-- `config.py`: Added missing `PipelineConfig` fields (`max_primers_per_block`, `min_cpg_per_primer`, `min_cpg_pair_total`) that caused step 3 to crash.
-- `pipeline.py`: Added graceful skip for blocks on chromosomes not in the genome. Updated default DMR and genome paths. Updated `--cell-type` help text.
-- `download_data.sh`: Removed `set -e` (was killing script on first download failure). Use FTP directory listing to handle NCBI filename truncation (74/207 files affected). Added progress counts.
-- `install_macos.sh`: Changed `tabix` to `htslib` (Homebrew removed standalone tabix formula).
-
-**Handbook fixes:**
-- Corrected DMR file path to `WBC_Panel_Top200_v7.9.xlsx`
-- Added cell type ID ↔ sheet name mapping table
-- Added "Running Without Bowtie2 and dbSNP" section
-- Added "Running All 7 Cell Types" section
-- Added "Testing with a Small Subset" section
-- Added troubleshooting entries for: permission denied, `#` comment lines, `quote>` stuck prompt, bgzip vs gzip, NCBI filename truncation, missing chromosomes, M-assays only
-- Added "What Changed from v1" section
-- Added "M-assays vs U-assays" explanation
-- Preserved old handbook as `handbook_v1.md`
-
-**Verified by stress testing:** All 7 cell types (MONO, BCELL, NK, GRAN, CD3T, CD8T, CD4T) run end-to-end through steps 1,2,3,5,7,8,9 with 20 blocks each. Total: 123 primer pairs, 7 XLSX files (27 columns each), 7 PDF files.

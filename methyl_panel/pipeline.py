@@ -89,16 +89,27 @@ def step2_bisulfite_convert(args, blocks_data=None):
             blocks_data = json.load(f)
 
     converted = []
+    skipped = 0
     for i, block in enumerate(blocks_data):
-        if args.max_blocks and i >= args.max_blocks:
+        if args.max_blocks and (i - skipped) >= args.max_blocks:
             break
 
         # Fetch genomic sequence with flanking
         flank = args.flank
-        seq = fetch_genomic_sequence(
-            args.genome, block["chrom"],
-            block["start"], block["end"], flank
-        )
+        try:
+            seq = fetch_genomic_sequence(
+                args.genome, block["chrom"],
+                block["start"], block["end"], flank
+            )
+        except (RuntimeError, Exception) as e:
+            print(f"  Skipping {block['seq_id']} ({block['chrom']}): {e}")
+            skipped += 1
+            continue
+
+        if not seq or 'N' * 10 in seq:
+            print(f"  Skipping {block['seq_id']} ({block['chrom']}): sequence not available")
+            skipped += 1
+            continue
 
         strands = convert_sequence(seq)
 
@@ -414,11 +425,13 @@ def main():
                         help="Comma-separated step numbers (e.g. 1,2,3) or 'all'")
     parser.add_argument("--output-dir", default="results/",
                         help="Output directory for results")
-    parser.add_argument("--dmr-xlsx", help="Path to DMR per-CpG Excel file")
-    parser.add_argument("--genome", default="hg19.fa.gz",
+    parser.add_argument("--dmr-xlsx", default="data/WBC_Panel_Top200_v7.9.xlsx",
+                        help="Path to DMR per-CpG Excel file")
+    parser.add_argument("--genome", default="data/hg19/hg19.fa.gz",
                         help="Path to genome FASTA (can be .gz)")
     parser.add_argument("--settings", help="Primer3Plus settings file")
-    parser.add_argument("--cell-type", help="Filter by cell type ID (e.g. MONO)")
+    parser.add_argument("--cell-type",
+                        help="Filter by cell type ID (MONO, BCELL, NK, GRAN, CD3T, CD8T, CD4T)")
     parser.add_argument("--min-cpg", type=int, default=5, help="Min CpGs per block")
     parser.add_argument("--preferred-min-cpg", type=int, default=7)
     parser.add_argument("--min-tm", type=float, help="Min Tm (°C) — REQUIRED")

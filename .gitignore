@@ -18,3 +18,7 @@ results/
 .DS_Store
 test_run/
 __pycache__/
+test_stress/
+data/hg19/
+data/WBC_Panel_Top200_v7.9.xlsx
+data/*.xlsx
