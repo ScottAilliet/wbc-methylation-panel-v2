@@ -124,6 +124,8 @@ chmod +x install_macos.sh    # Make the script executable (one-time)
 
 `chmod +x` means "make this file executable" — you only do this once. `./` means "run the file in this folder."
 
+> **If you get "permission denied":** You forgot `chmod +x`. Run `chmod +x install_macos.sh` first, then `./install_macos.sh`.
+
 ---
 
 ### 0.5 Running Commands and Scripts
@@ -204,18 +206,17 @@ python -m methyl_panel.pipeline --help
 ### 1.2 Step-by-Step Installation
 
 ```bash
-# 1. Clone the repository from GitHub
 git clone https://github.com/ScottAilliet/wbc-methylation-panel-v2.git
 cd wbc-methylation-panel-v2
-
-# 2. Run the installation script
 chmod +x install_macos.sh
 ./install_macos.sh
 ```
 
+> **Do not paste the `#` comment lines** — they are explanations, not commands. Only paste the lines without `#`. If you paste a `#` line, you will see `zsh: command not found: #` which is harmless but confusing.
+
 The script will:
 1. Install Homebrew (if not present)
-2. Install system tools: samtools, bowtie2, tabix, bedtools
+2. Install system tools: samtools, bowtie2, htslib (includes tabix), bedtools
 3. Create a Python virtual environment (`.venv`)
 4. Install Python packages: primer3-py, openpyxl, pandas, numpy, reportlab, pysam
 5. Install wgbstools from GitHub source

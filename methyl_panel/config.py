@@ -953,6 +953,9 @@ class PipelineConfig:
     top_n_markers: int = 300
     sort_by: str = "delta_means"
     threads: int = 8
+    max_primers_per_block: int = 10  # cap primer pairs returned per block per template
+    min_cpg_per_primer: int = 2       # min CpGs in at least one primer of the pair
+    min_cpg_pair_total: int = 4       # min total CpGs across both primers
 
     # Sub-configs
     primer3: Primer3PlusConfig = field(default_factory=Primer3PlusConfig)

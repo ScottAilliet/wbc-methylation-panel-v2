@@ -16,3 +16,5 @@ results/
 *.fai
 *.gzi
 .DS_Store
+test_run/
+__pycache__/
