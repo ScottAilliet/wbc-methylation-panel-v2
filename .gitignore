@@ -9,6 +9,8 @@ build/
 data/beta_files/
 results/
 *.bed
+*.bed.gz
+*.bed.gz.tbi
 *.beta
 *.bam
 *.bai
@@ -17,7 +19,7 @@ results/
 *.gzi
 .DS_Store
 test_run/
-__pycache__/
+test_dmr/
 test_stress/
 data/hg19/
 data/WBC_Panel_Top200_v7.9.xlsx

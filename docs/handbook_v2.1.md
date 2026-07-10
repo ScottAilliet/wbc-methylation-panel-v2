@@ -1,8 +1,8 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.0
+**Version:** Pipeline v2.1.2
 **Repository:** `wbc-methylation-panel-v2`
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-09
 
 ---
 
@@ -12,17 +12,15 @@
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
 
-### What Changed in v2.2.0
+### What Changed from v1
 
-This version adds **DMR discovery from scratch** — the pipeline is now fully self-contained. You no longer need a pre-computed DMR Excel file. The new Step 0 uses `wgbstools find_markers` to discover differentially methylated regions directly from the raw 207 beta files downloaded by `download_data.sh`.
+This handbook (v2.1.0) replaces the previous version (saved as `handbook_v1.md`). Key changes:
 
-Key changes:
-
-1. **New Step 0 (DMR Discovery):** `--discover-dmrs` flag runs `wgbstools find_markers` on raw beta files to find DMRs from scratch. No external DMR file needed.
-2. **New module:** `phase0_dmr_discovery.py` — generates groups files, runs find_markers, extracts per-CpG methylation, computes cleanliness scores.
-3. **`install_macos.sh` fixed:** wgbstools now properly installed via `pip install -e .` (not just C++ compilation). Added scipy dependency. Removed unnecessary `init_genome` call.
-4. **Cell type target mapping:** Each of the 7 cell types maps to specific atlas groups (e.g. CD3T = all T cell subtypes, BCELL = B + B-Memory).
-5. **Backward compatible:** Step 1 (load from Excel) still works for users who have a pre-computed DMR file.
+1. **DMR input file:** The pipeline now uses `WBC_Panel_Top200_v7.9.xlsx` (the output of the DMR discovery pipeline) instead of a non-existent `DMR_percpg_full_atlas_all_cell_types.xlsx`. The loader auto-detects the format.
+2. **Cell type IDs:** Both short IDs (`MONO`, `BCELL`) and sheet names (`Mono`, `B`) are accepted.
+3. **Genome path:** Default changed to `data/hg19/hg19.fa.gz`.
+4. **Bug fixes:** `PipelineConfig` missing fields fixed, `download_data.sh` NCBI truncation fixed, `install_macos.sh` tabix→htslib fixed.
+5. **Error handling:** Blocks on chromosomes not in the genome are now skipped gracefully instead of crashing.
 
 ### Who This Handbook Is For
 
@@ -227,9 +225,10 @@ The script will:
 1. Install Homebrew (if not present)
 2. Install system tools: samtools, bowtie2, htslib (includes tabix), bedtools
 3. Create a Python virtual environment (`.venv`)
-4. Install Python packages: primer3-py, openpyxl, pandas, numpy, reportlab, pysam, scipy
-5. Install wgbstools from GitHub source (compiles C++ tools + pip install)
-6. Verify all installations
+4. Install Python packages: primer3-py, openpyxl, pandas, numpy, reportlab, pysam
+5. Install wgbstools from GitHub source
+6. Initialize the hg19 reference genome for wgbstools
+7. Verify all installations
 
 This takes about 10–15 minutes depending on your internet speed.
 
@@ -248,19 +247,6 @@ samtools --version | head -1
 ```
 
 If all commands print a version or "Pipeline OK", you're ready.
-
-Also verify wgbstools:
-
-```bash
-wgbstools --version
-```
-
-If `wgbstools: command not found`, the install script should have created a symlink. If not:
-
-```bash
-ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
-wgbstools --version
-```
 
 ---
 
@@ -301,17 +287,17 @@ This downloads:
 
 > **Note:** The download script uses `wget -q` (quiet mode) for beta files, so there are no progress bars. You will see `[$COUNT/$TOTAL] OK:` lines as each file downloads. The dbSNP download (~10 GB) shows a progress bar.
 
-### 2.3 The DMR Input — Two Options
+### 2.3 The DMR Input File
 
-The pipeline needs DMR blocks (differentially methylated regions) as input. There are two ways to provide them:
+The pipeline reads DMR blocks from an Excel file. The default is:
 
-**Option A — Discover DMRs from scratch (recommended, fully self-contained):**
+```
+data/WBC_Panel_Top200_v7.9.xlsx
+```
 
-Use `--discover-dmrs` to run Step 0, which uses `wgbstools find_markers` to discover DMRs directly from the 207 beta files you downloaded. No external file needed — this is the default workflow for v2.2.0.
+This file contains 7 cell-type sheets (CD4T, CD8T, B, NK, Mono, Gran, Blood-T-CD3), each with 105–196 DMR blocks including per-CpG methylation data, genomic coordinates, gene annotations, and cleanliness scores.
 
-**Option B — Load a pre-computed DMR Excel file:**
-
-Use `--dmr-xlsx` to load a pre-computed Excel file (Step 1). This is useful if you already have DMR blocks from a previous analysis. The file must be in v7.9 format (one sheet per cell type) or Block_Summary format.
+**If you don't have this file:** It is the output of the DMR discovery pipeline (repo 1, `wbc-methylation-panel`). You can also generate it by running `wgbstools find_markers` with the downloaded beta files and blocks file. See the [Materials and Methods](materials_and_methods.md) for details.
 
 ### 2.4 If You Already Have Some Data
 
@@ -328,12 +314,11 @@ Then run `./download_data.sh` — it will skip what you already have and downloa
 
 ## Chapter 3 — Running the Pipeline
 
-### 3.1 The Pipeline Steps
+### 3.1 The 9 Pipeline Steps
 
 | Step | Module | What it does | Needs full genome? |
 |------|--------|-------------|-------------------|
-| 0 | `phase0_dmr_discovery` | Discover DMRs from raw beta files (wgbstools find_markers) | No |
-| 1 | `phase1_dmr_loader` | Load DMR blocks from a pre-computed Excel file | No |
+| 1 | `phase1_dmr_loader` | Load DMR blocks from the Excel file | No |
 | 2 | `phase2_bisulfite_convert` | Bisulfite-convert genomic sequences to 6 strands | Yes (samtools faidx) |
 | 3 | `phase3_primer3_design` | Design primers with Primer3 | No (uses step 2 output) |
 | 4 | `phase4_bowtie_specificity` | Screen primers against 6 genome states with bowtie2 | Yes (bowtie2 indices) |
@@ -343,55 +328,15 @@ Then run `./download_data.sh` — it will skip what you already have and downloa
 | 8 | `output_xlsx` | Generate U-assays-style Excel output (27 columns) | No |
 | 9 | `output_pdf` | Generate U-assays-style PDF (one page per primer pair) | No |
 
-**Step 0 vs Step 1:** You use either Step 0 (`--discover-dmrs`) or Step 1 (default), not both. Step 0 discovers DMRs from raw beta files. Step 1 loads them from a pre-computed Excel file. Both produce the same `dmr_blocks.json` output that steps 2–9 consume.
-
-**Steps that work without bowtie2/dbSNP:** 0, 1, 2, 3, 5, 7, 8, 9 (need only beta files + blocks file + hg19 genome)
+**Steps that work without the full data download:** 1, 2, 3, 5, 7, 8, 9 (need only the DMR Excel + hg19 genome)
 
 **Steps that need the full data download:** 4 (bowtie2 indices), 6 (dbSNP VCF)
 
-### 3.2 Running with DMR Discovery (Recommended)
-
-This is the default workflow for v2.2.0 — fully self-contained, no external DMR file needed:
+### 3.2 Running All Steps
 
 ```bash
 source .venv/bin/activate
 
-python -m methyl_panel.pipeline --steps all --discover-dmrs \
-    --cell-type MONO \
-    --genome data/hg19/hg19.fa.gz \
-    --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --output-dir results/MONO/
-```
-
-**Required arguments for `--discover-dmrs`:**
-- `--cell-type`: One of `MONO`, `BCELL`, `NK`, `GRAN`, `CD3T`, `CD8T`, `CD4T` (required)
-- `--genome`: Path to the hg19 genome FASTA (can be `.gz`; default: `data/hg19/hg19.fa.gz`)
-- `--min-tm`, `--opt-tm`, `--max-tm`: Tm range in °C — **required, no defaults**
-
-**DMR discovery arguments (optional):**
-- `--beta-dir`: Directory with .beta files (default: `data/beta_files/`)
-- `--blocks-file`: Path to blocks BED file (default: `data/GSE186458_blocks.s205.bed.gz`)
-- `--groups-csv`: Path to full atlas groups CSV (default: `data/full_atlas_groups.csv`)
-- `--threads`: Number of threads for find_markers (default: 2)
-- `--top-markers`: Number of top markers per cell type (default: 200)
-- `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
-
-**What Step 0 does:**
-1. Generates a groups CSV file — target samples (your cell type) vs background (all other samples in the atlas)
-2. Generates a beta list file — paths to all .beta files
-3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs (delta_means ≥ 0.3, min 3 CpGs, top 200)
-4. Parses the output BED file
-5. Extracts per-CpG methylation from beta files for each DMR
-6. Computes cleanliness scores (target near-zero, background near-one, consistency, coverage)
-7. Saves `dmr_blocks.json` — same format as Step 1, so steps 2–9 work unchanged
-
-**Runtime:** ~5 minutes per cell type with 2 threads on a Mac (find_markers ~1 min, per-CpG extraction ~4 min).
-
-### 3.3 Running with a Pre-Computed Excel File
-
-If you already have a DMR Excel file (v7.9 format):
-
-```bash
 python -m methyl_panel.pipeline --steps all \
     --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
@@ -399,85 +344,95 @@ python -m methyl_panel.pipeline --steps all \
     --output-dir results/
 ```
 
-### 3.4 Running Without Bowtie2 and dbSNP
+**Required arguments:**
+- `--dmr-xlsx`: Path to the DMR Excel file (default: `data/WBC_Panel_Top200_v7.9.xlsx`)
+- `--genome`: Path to the hg19 genome FASTA (can be `.gz`; default: `data/hg19/hg19.fa.gz`)
+- `--min-tm`, `--opt-tm`, `--max-tm`: Tm range in °C — **required, no defaults**
 
-If you haven't downloaded the bowtie2 indices or dbSNP VCF yet, you can still run steps 0, 2, 3, 5, 7, 8, 9:
+**Optional arguments:**
+- `--output-dir`: Where to save results (default: `results/`)
+- `--cell-type`: Filter to one cell type (e.g. `MONO`, `BCELL`, `NK`, `GRAN`, `CD3T`, `CD8T`, `CD4T`)
+- `--settings`: Load Primer3Plus settings from a file
+- `--flank`: Flanking bp around each DMR (default: 100)
+- `--max-blocks`: Limit number of blocks (for testing)
+- `--min-cpg`: Minimum CpGs per block (default: 5)
+- `--bowtie-index-dir`: Directory with bowtie2 indices (for Step 4)
+- `--dbsnp`: Path to dbSNP VCF (for Step 6)
+
+### 3.3 Running Without Bowtie2 and dbSNP
+
+If you haven't downloaded the bowtie2 indices or dbSNP VCF yet, you can still run steps 1, 2, 3, 5, 7, 8, 9:
 
 ```bash
-python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 --discover-dmrs \
-    --cell-type MONO \
+python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --output-dir results/MONO/
+    --output-dir results/
 ```
 
 The bowtie_passes_filter and common_variant_score columns will be NULL in the output. You can run steps 4 and 6 later once the data is downloaded.
 
-### 3.5 Running Specific Steps
+### 3.4 Running Specific Steps
 
 You can run any combination of steps. This is useful for re-running just the QC steps after changing parameters:
 
 ```bash
-# DMR discovery only:
-python -m methyl_panel.pipeline --steps 0 --discover-dmrs \
-    --cell-type MONO --output-dir results/MONO/
-
-# Primer design only (after DMR discovery):
-python -m methyl_panel.pipeline --steps 2,3 \
+python -m methyl_panel.pipeline --steps 1,2,3 \
+    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
-    --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --output-dir results/MONO/
+    --min-tm 58 --opt-tm 60 --max-tm 62
 
-# QC steps only:
 python -m methyl_panel.pipeline --steps 5,7 \
-    --output-dir results/MONO/
+    --output-dir results/
 
-# Output only:
 python -m methyl_panel.pipeline --steps 8,9 \
-    --output-dir results/MONO/
+    --output-dir results/
 ```
 
 Each step reads from and writes to JSON files in the output directory, so steps can be run independently as long as the prerequisite JSON files exist.
 
-### 3.6 Running a Single Cell Type
+### 3.5 Running a Single Cell Type
 
 ```bash
-python -m methyl_panel.pipeline --steps all --discover-dmrs \
-    --cell-type CD8T \
+python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
+    --cell-type CD8T \
     --output-dir results/CD8T/
 ```
 
-Cell type IDs and their target samples in the atlas:
+Cell type IDs:
 
-| Cell type | ID | Atlas groups (target samples) | # Samples |
-|-----------|-----|-------------------------------|-----------|
-| Monocytes | `MONO` | Blood-Monocytes | 3 |
-| B cells | `BCELL` | Blood-B, Blood-B-Mem | 5 |
-| NK cells | `NK` | Blood-NK | 3 |
-| Granulocytes | `GRAN` | Blood-Granulocytes | 3 |
-| CD3 T cells (pan-T) | `CD3T` | All Blood-T-* groups | 22 |
-| CD8 T cells | `CD8T` | Blood-T-CD8, Blood-T-Eff-CD8, Blood-T-EffMem-CD8, Blood-T-Naive-CD8 | 10 |
-| CD4 T cells | `CD4T` | Blood-T-CD4, Blood-T-CenMem-CD4, Blood-T-EffMem-CD4, Blood-T-Naive-CD4 | 10 |
+| Cell type | ID | Sheet name in v7.9 Excel |
+|-----------|-----|--------------------------|
+| Monocytes | `MONO` | Mono |
+| B cells | `BCELL` | B |
+| NK cells | `NK` | NK |
+| Granulocytes | `GRAN` | Gran |
+| CD3 T cells (pan-T) | `CD3T` | Blood-T-CD3 |
+| CD8 T cells | `CD8T` | CD8T |
+| CD4 T cells | `CD4T` | CD4T |
 
-When using `--discover-dmrs`, the pipeline automatically merges these atlas groups into one target population. All other 207 samples in the atlas serve as background.
+Both the short ID and the sheet name are accepted (e.g. `--cell-type MONO` and `--cell-type Mono` both work).
 
-### 3.7 Running All 7 Cell Types
+### 3.6 Running All 7 Cell Types
 
-To run all 7 immune cell types with DMR discovery:
+To run all 7 immune cell types, run the pipeline 7 times with a different `--cell-type` each time:
 
 ```bash
 for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
-    python -m methyl_panel.pipeline --steps all --discover-dmrs \
-        --cell-type $CT \
+    python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+        --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
+        --cell-type $CT \
         --output-dir results/$CT/
 done
 ```
 
-Each cell type's results are saved in its own subdirectory (`results/MONO/`, `results/BCELL/`, etc.). The find_markers step runs once per cell type (~1 min each), and per-CpG extraction takes ~4 min per cell type. Total runtime: ~35 minutes for all 7.
+Each cell type's results are saved in its own subdirectory (`results/MONO/`, `results/BCELL/`, etc.).
 
 ### 3.7 Choosing Tm Values
 
@@ -510,27 +465,16 @@ The settings file overrides all Primer3 parameters, including Tm. If the setting
 To test the pipeline quickly without processing all blocks:
 
 ```bash
-python -m methyl_panel.pipeline --steps all --discover-dmrs \
-    --cell-type MONO \
+python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --max-blocks 50 \
+    --cell-type MONO \
+    --max-blocks 5 \
     --output-dir results/test/
 ```
 
-`--max-blocks 50` processes only the first 50 blocks that pass the CpG count filter. Note: the first blocks by delta_means may have only 3–4 CpGs (below the `--min-cpg 5` threshold), so use at least `--max-blocks 50` to ensure some blocks pass the filter and produce primers.
-
-To skip re-running find_markers on subsequent runs (reuse the existing BED output):
-
-```bash
-python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 --discover-dmrs \
-    --cell-type MONO \
-    --genome data/hg19/hg19.fa.gz \
-    --min-tm 58 --opt-tm 60 --max-tm 62 \
-    --max-blocks 50 \
-    --skip-find-markers \
-    --output-dir results/test/
-```
+`--max-blocks 5` processes only the first 5 blocks that have sequences available in the genome. This is useful for verifying the pipeline works before running the full set.
 
 ---
 
@@ -542,10 +486,7 @@ After running the pipeline, the output directory contains:
 
 | File | Description |
 |------|-------------|
-| `groups_MONO.csv` | Groups file for find_markers (target vs background) — Step 0 |
-| `beta_list.txt` | List of beta file paths — Step 0 |
-| `find_markers_output/` | wgbstools find_markers output (BED files, params) — Step 0 |
-| `dmr_blocks.json` | DMR blocks (from Step 0 or Step 1) |
+| `dmr_blocks.json` | DMR blocks loaded in Step 1 |
 | `converted_sequences.json` | Bisulfite-converted sequences from Step 2 |
 | `primers.json` | All primer pairs with QC results (updated by each step) |
 | `primer_assays.xlsx` | U-assays-style Excel output (27 columns) |
@@ -739,28 +680,8 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 ### 7.2 Data Problems
 
 **Problem:** `FileNotFoundError: data/WBC_Panel_Top200_v7.9.xlsx`
-- **Cause:** You're using Step 1 (load from Excel) but the DMR Excel file is not in the `data/` folder
-- **Solution:** Use `--discover-dmrs` instead to discover DMRs from scratch from the beta files. Or, if you have a pre-computed Excel file, copy it to `data/`.
-
-**Problem:** `wgbstools: command not found` (when using --discover-dmrs)
-- **Cause:** wgbstools not installed or not on PATH
-- **Solution:** Re-run `./install_macos.sh`. If that doesn't fix it, manually install:
-  ```bash
-  cd wgbs_tools && python3 setup.py && pip install -e . && cd ..
-  ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
-  ```
-
-**Problem:** `wgbstools find_markers failed with return code 1`
-- **Cause:** Missing beta files, blocks file, or groups file. Or insufficient memory.
-- **Solution:** Ensure `data/beta_files/` has all 207 .beta files (run `./download_data.sh`). Ensure `data/GSE186458_blocks.s205.bed.gz` exists. Check the error message printed by find_markers.
-
-**Problem:** `No markers found` or `0 blocks` from find_markers
-- **Cause:** The target cell type has too few samples, or the delta_means threshold is too high, or beta files are missing for the target samples
-- **Solution:** Check that the target cell type's beta files are present in `data/beta_files/`. The groups file is automatically filtered to only include samples with available beta files.
-
-**Problem:** `No primers found` with `--max-blocks 10`
-- **Cause:** The first 10 blocks by delta_means may have only 3–4 CpGs, below the `--min-cpg 5` threshold
-- **Solution:** Use `--max-blocks 50` or more. The first blocks ranked by delta_means tend to have fewer CpGs; blocks with 5+ CpGs appear later in the ranking.
+- **Cause:** The DMR Excel file is not in the `data/` folder
+- **Solution:** This file is the output of the DMR discovery pipeline (repo 1). Copy it to `data/` or generate it by running `wgbstools find_markers`.
 
 **Problem:** `samtools faidx failed` or `No sequence returned`
 - **Cause:** hg19 genome FASTA not found, not indexed, or the chromosome is not in the genome
@@ -833,8 +754,7 @@ wbc-methylation-panel-v2/
 ├── methyl_panel/                    # Python package
 │   ├── __init__.py                  # Package init (version 2.0.0)
 │   ├── config.py                    # Primer3PlusConfig (181 params) + PipelineConfig
-│   ├── pipeline.py                  # CLI entry point (steps 0-9)
-│   ├── phase0_dmr_discovery.py      # Step 0: DMR discovery via wgbstools find_markers
+│   ├── pipeline.py                  # CLI entry point (9 steps)
 │   ├── phase1_dmr_loader.py         # Step 1: Load DMR blocks from Excel (v7.9 + Block_Summary)
 │   ├── phase2_bisulfite_convert.py  # Step 2: Bisulfite convert to 6 strands
 │   ├── phase3_primer3_design.py     # Step 3: Primer3 primer design
@@ -845,14 +765,14 @@ wbc-methylation-panel-v2/
 │   ├── output_xlsx.py               # Step 8: U-assays-style Excel output
 │   └── output_pdf.py                # Step 9: U-assays-style PDF output
 ├── data/                            # Data files
+│   ├── WBC_Panel_Top200_v7.9.xlsx   # DMR blocks (7 cell types, per-CpG methylation)
 │   ├── full_atlas_manifest.csv      # 207 sample download manifest
 │   ├── full_atlas_groups.csv        # Full atlas cell type groups (82 types)
 │   ├── immune_groups.csv            # Immune cell type groups (7 types)
 │   └── download_list_nonimmune.csv  # Non-immune sample download list
 ├── docs/
-│   ├── handbook.md                  # This document (v2.2.0)
-│   ├── handbook_v2.1.md             # Previous handbook version (preserved)
-│   ├── handbook_v1.md               # Original handbook version (preserved)
+│   ├── handbook.md                  # This document (v2.1.0)
+│   ├── handbook_v1.md               # Previous handbook version (preserved)
 │   └── materials_and_methods.md     # Scientific methods reference
 ├── install_macos.sh                 # macOS installation script
 ├── download_data.sh                 # Data download script (~15 GB)
@@ -910,30 +830,29 @@ source .venv/bin/activate
 ```
 
 ```bash
-# Discover DMRs from scratch and design primers for monocytes
-python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
-    --discover-dmrs --cell-type MONO \
+python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
     --output-dir results/
 ```
 
 ```bash
-# Same for CD8 T cells
-python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
-    --discover-dmrs --cell-type CD8T \
+python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
     --genome data/hg19/hg19.fa.gz \
     --min-tm 58 --opt-tm 60 --max-tm 62 \
+    --cell-type CD8T \
     --output-dir results/CD8T/
 ```
 
 ```bash
-# All 7 immune cell types
 for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
-    python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
-        --discover-dmrs --cell-type $CT \
+    python -m methyl_panel.pipeline --steps 1,2,3,5,7,8,9 \
+        --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
+        --cell-type $CT \
         --output-dir results/$CT/
 done
 ```
@@ -946,17 +865,6 @@ open results/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
-
-### v2.2.0 (2026-07-10)
-
-**New feature — DMR discovery from scratch:**
-- `phase0_dmr_discovery.py`: New module implementing Step 0. Generates per-cell-type groups files (target vs background), runs `wgbstools find_markers` on raw beta files, parses BED output, extracts per-CpG methylation from beta files, computes 5-component cleanliness scores, and saves `dmr_blocks.json` in the same format as Step 1.
-- `pipeline.py`: Added `step0_discover_dmrs()` and new CLI arguments (`--discover-dmrs`, `--beta-dir`, `--blocks-file`, `--groups-csv`, `--wgbstools-path`, `--threads`, `--top-markers`, `--max-bg-samples`, `--skip-find-markers`). When `--discover-dmrs` is set, Step 0 replaces Step 1.
-- `install_macos.sh`: Fixed wgbstools installation — now uses `pip install -e .` after C++ compilation (was only compiling C++ tools, not installing the Python package). Added `scipy` dependency. Removed unnecessary `init_genome` call. Added symlink fallback for PATH.
-- Cell type target mapping: 7 immune cell types mapped to atlas groups (MONO→Blood-Monocytes, BCELL→Blood-B+Blood-B-Mem, NK→Blood-NK, GRAN→Blood-Granulocytes, CD3T→9 T cell subtypes, CD4T→4 CD4 subtypes, CD8T→4 CD8 subtypes).
-- Backward compatible: Step 1 (load from Excel) still works via `--dmr-xlsx`.
-
-**Verified by sandbox testing:** Step 0 runs end-to-end on chr22 with 10 beta files (3 Monocytes + 7 background). find_markers finds 1,873 markers, outputs top 200. Per-CpG methylation extracted (target ~0.01, background ~0.93). 197/200 blocks have cleanliness score ≥ 0.6. Full pipeline (steps 0,2,3,5,7,8,9, --max-blocks 50) produces 30 primer pairs, XLSX (30 rows, 27 cols), PDF (76 KB).
 
 ### v2.1.2 (2026-07-09)
 

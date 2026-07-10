@@ -54,8 +54,9 @@ pip install primer3-py==2.3.0
 pip install openpyxl pandas numpy
 pip install reportlab
 pip install pysam
+pip install scipy
 
-echo "✓ Python packages installed"
+echo "✓ Python packages installed (including scipy for find_markers t-tests)"
 
 # Install wgbstools (from GitHub — not on PyPI)
 echo ""
@@ -63,23 +64,31 @@ echo "Installing wgbstools (from GitHub source)..."
 if [ ! -d "wgbs_tools" ]; then
     git clone https://github.com/nloyfer/wgbs_tools.git
 fi
+
+# Step 1: Compile C++ tools (patter, segmentor, etc.)
 cd wgbs_tools
 python3 setup.py
+
+# Step 2: Install Python package into the virtualenv so that
+# 'wgbstools' is on PATH and all modules are importable.
+pip install -e .
+
 cd ..
 
 echo "✓ wgbstools installed"
 
-# Initialize hg19 reference for wgbstools
-echo ""
-echo "Initializing hg19 reference for wgbstools..."
-python3 -c "
-import sys
-sys.path.insert(0, 'wgbs_tools/src/python')
-from init_genome import init_genome
-init_genome('hg19')
-" 2>/dev/null || echo "  (hg19 reference will be initialized on first run)"
+# Verify wgbstools is on PATH
+if ! command -v wgbstools &> /dev/null; then
+    echo "  wgbstools not on PATH, adding symlink..."
+    ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
+fi
 
-echo "✓ hg19 reference ready"
+echo "✓ wgbstools available: $(which wgbstools)"
+
+# NOTE: init_genome is NOT needed for the pipeline.
+# find_markers works directly with the blocks file and beta files.
+# The pipeline finds CpG positions by scanning the genomic sequence
+# in step 2, so no CpG dictionary is required.
 
 # Verify installation
 echo ""
@@ -95,6 +104,8 @@ echo -n "primer3-py: "; python3 -c "import primer3; print(primer3.__version__)"
 echo -n "openpyxl: "; python3 -c "import openpyxl; print(openpyxl.__version__)"
 echo -n "pandas: "; python3 -c "import pandas; print(pandas.__version__)"
 echo -n "reportlab: "; python3 -c "import reportlab; print(reportlab.Version)"
+echo -n "scipy: "; python3 -c "import scipy; print(scipy.__version__)"
+echo -n "wgbstools: "; wgbstools --version 2>/dev/null || echo "WARNING: wgbstools not working"
 
 echo ""
 echo "=========================================="
@@ -104,15 +115,25 @@ echo ""
 echo "To activate the environment:"
 echo "  source .venv/bin/activate"
 echo ""
-echo "To run the pipeline:"
-echo "  python -m methyl_panel.pipeline --steps all \\"
-echo "    --dmr-xlsx DMR_percpg_full_atlas_all_cell_types.xlsx \\"
-echo "    --genome hg19.fa.gz \\"
+echo "To run the full pipeline (DMR discovery + primer design):"
+echo "  python -m methyl_panel.pipeline --steps all --discover-dmrs \\"
+echo "    --cell-type MONO \\"
+echo "    --genome data/hg19/hg19.fa.gz \\"
 echo "    --min-tm 58 --opt-tm 60 --max-tm 62 \\"
 echo "    --output-dir results/"
 echo ""
-echo "To run specific steps only:"
-echo "  python -m methyl_panel.pipeline --steps 1,2,3 \\"
-echo "    --dmr-xlsx DMR_percpg_full_atlas_all_cell_types.xlsx \\"
-echo "    --genome hg19.fa.gz \\"
-echo "    --min-tm 58 --opt-tm 60 --max-tm 62"
+echo "To run for all 7 cell types, repeat for each:"
+echo "  for CT in MONO BCELL NK GRAN CD3T CD4T CD8T; do"
+echo "    python -m methyl_panel.pipeline --steps all --discover-dmrs \\"
+echo "      --cell-type \$CT \\"
+echo "      --genome data/hg19/hg19.fa.gz \\"
+echo "      --min-tm 58 --opt-tm 60 --max-tm 62 \\"
+echo "      --output-dir results/\$CT"
+echo "  done"
+echo ""
+echo "To load DMR blocks from a pre-computed Excel file (step 1):"
+echo "  python -m methyl_panel.pipeline --steps all \\"
+echo "    --dmr-xlsx data/WBC_Panel_Top200_v7.9.xlsx \\"
+echo "    --genome data/hg19/hg19.fa.gz \\"
+echo "    --min-tm 58 --opt-tm 60 --max-tm 62 \\"
+echo "    --output-dir results/"

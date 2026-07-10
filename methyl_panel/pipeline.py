@@ -6,11 +6,18 @@ Modular step-by-step pipeline for designing bisulfite-PCR primers
 for WBC methylation markers.
 
 Usage:
+    # DMR discovery from raw beta files (fully self-contained):
+    python -m methyl_panel.pipeline --steps all --discover-dmrs \\
+        --cell-type MONO --genome data/hg19/hg19.fa.gz \\
+        --min-tm 58 --opt-tm 60 --max-tm 62 --output-dir results/
+
+    # Load DMR blocks from a pre-computed Excel file:
     python -m methyl_panel.pipeline --steps 1,2,3 --dmr-xlsx DMR.xlsx --genome hg19.fa.gz
     python -m methyl_panel.pipeline --steps all --output-dir results/
     python -m methyl_panel.pipeline --steps 3,4,5,6,7 --primers primers.json
 
 Steps:
+    0. Discover DMRs from raw beta files (wgbstools find_markers)  [--discover-dmrs]
     1. Load DMR blocks from Excel
     2. Bisulfite convert genomic sequences
     3. Design primers with Primer3
@@ -29,6 +36,63 @@ import argparse
 from typing import List, Optional, Dict
 
 from methyl_panel.config import Primer3PlusConfig, PipelineConfig
+
+
+def step0_discover_dmrs(args):
+    """Step 0: Discover DMRs from raw beta files using wgbstools find_markers."""
+    from methyl_panel.phase0_dmr_discovery import discover_dmrs, VALID_CELL_TYPES
+
+    print("\n=== Step 0: DMR Discovery (wgbstools find_markers) ===")
+
+    if not args.cell_type:
+        raise ValueError(
+            "--cell-type is required when using --discover-dmrs. "
+            f"Valid options: {', '.join(VALID_CELL_TYPES)}"
+        )
+
+    blocks = discover_dmrs(
+        cell_type_id=args.cell_type,
+        beta_dir=args.beta_dir,
+        blocks_file=args.blocks_file,
+        groups_csv=args.groups_csv,
+        out_dir=args.output_dir,
+        threads=args.threads,
+        top_n=args.top_markers,
+        wgbstools_path=args.wgbstools_path,
+        max_bg_samples=args.max_bg_samples,
+        skip_find_markers=args.skip_find_markers,
+    )
+
+    # Convert DMRBlock objects to the same dict format that step 1 produces
+    # so that steps 2-9 can consume them identically
+    blocks_data = []
+    for b in blocks:
+        blocks_data.append({
+            "cell_type_id": b.cell_type_id,
+            "seq_id": b.seq_id,
+            "rank": b.rank,
+            "chrom": b.chrom,
+            "start": b.start,
+            "end": b.end,
+            "num_cpgs": b.num_cpgs,
+            "block_len": b.block_len,
+            "gene": b.gene,
+            "annotation": b.annotation,
+            "cleanliness_score": b.cleanliness_score,
+            "target_mean_meth": b.target_mean_meth,
+            "background_mean_meth": b.background_mean_meth,
+            "delta_means": b.delta_means,
+            "cpg_sites": [
+                {"label": c.label, "position": c.position,
+                 "global_idx": c.global_idx,
+                 "target_mean_beta": c.target_mean_beta,
+                 "background_mean_beta": c.background_mean_beta}
+                for c in b.cpg_sites
+            ],
+        })
+
+    print(f"\n  DMR discovery complete: {len(blocks_data)} blocks for {args.cell_type}")
+    return blocks_data
 
 
 def step1_load_dmrs(args):
@@ -422,16 +486,17 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("--steps", default="all",
-                        help="Comma-separated step numbers (e.g. 1,2,3) or 'all'")
+                        help="Comma-separated step numbers (e.g. 0,2,3 or 1,2,3) or 'all'")
     parser.add_argument("--output-dir", default="results/",
                         help="Output directory for results")
     parser.add_argument("--dmr-xlsx", default="data/WBC_Panel_Top200_v7.9.xlsx",
-                        help="Path to DMR per-CpG Excel file")
+                        help="Path to DMR per-CpG Excel file (for step 1)")
     parser.add_argument("--genome", default="data/hg19/hg19.fa.gz",
                         help="Path to genome FASTA (can be .gz)")
     parser.add_argument("--settings", help="Primer3Plus settings file")
     parser.add_argument("--cell-type",
-                        help="Filter by cell type ID (MONO, BCELL, NK, GRAN, CD3T, CD8T, CD4T)")
+                        help="Cell type ID (MONO, BCELL, NK, GRAN, CD3T, CD8T, CD4T). "
+                             "Required with --discover-dmrs.")
     parser.add_argument("--min-cpg", type=int, default=5, help="Min CpGs per block")
     parser.add_argument("--preferred-min-cpg", type=int, default=7)
     parser.add_argument("--min-tm", type=float, help="Min Tm (°C) — REQUIRED")
@@ -441,15 +506,46 @@ def main():
     parser.add_argument("--max-blocks", type=int, help="Max blocks to process (for testing)")
     parser.add_argument("--bowtie-index-dir", help="Directory with bowtie2 indices")
     parser.add_argument("--dbsnp", help="Path to dbSNP VCF")
+
+    # --- Step 0: DMR Discovery arguments ---
+    parser.add_argument("--discover-dmrs", action="store_true",
+                        help="Run Step 0 (DMR discovery from raw beta files) "
+                             "instead of Step 1 (load from Excel)")
+    parser.add_argument("--beta-dir", default="data/beta_files/",
+                        help="Directory containing .beta files (for --discover-dmrs)")
+    parser.add_argument("--blocks-file", default="data/GSE186458_blocks.s205.bed.gz",
+                        help="Path to blocks BED file (for --discover-dmrs)")
+    parser.add_argument("--groups-csv", default="data/full_atlas_groups.csv",
+                        help="Path to full atlas groups CSV (for --discover-dmrs)")
+    parser.add_argument("--wgbstools-path",
+                        help="Path to wgbstools executable (auto-detected if omitted)")
+    parser.add_argument("--threads", type=int, default=2,
+                        help="Number of threads for find_markers")
+    parser.add_argument("--top-markers", type=int, default=200,
+                        help="Number of top markers per cell type")
+    parser.add_argument("--max-bg-samples", type=int, default=30,
+                        help="Max background samples for per-CpG extraction")
+    parser.add_argument("--skip-find-markers", action="store_true",
+                        help="Skip find_markers (reuse existing BED output)")
+
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Parse steps
-    if args.steps == "all":
-        steps = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    # If --discover-dmrs is set, replace step 1 with step 0
+    if args.discover_dmrs:
+        if args.steps == "all":
+            steps = [0, 2, 3, 4, 5, 6, 7, 8, 9]
+        else:
+            steps = [int(s.strip()) for s in args.steps.split(",")]
+            # If user specified step 1 with --discover-dmrs, replace with 0
+            steps = [0 if s == 1 else s for s in steps]
     else:
-        steps = [int(s.strip()) for s in args.steps.split(",")]
+        # Parse steps normally
+        if args.steps == "all":
+            steps = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        else:
+            steps = [int(s.strip()) for s in args.steps.split(",")]
 
     # Validate Tm is set for primer design steps
     if any(s in steps for s in [3]) and not all([args.min_tm, args.opt_tm, args.max_tm]):
@@ -463,7 +559,9 @@ def main():
     primers_data = None
 
     for step in steps:
-        if step == 1:
+        if step == 0:
+            blocks_data = step0_discover_dmrs(args)
+        elif step == 1:
             blocks_data = step1_load_dmrs(args)
         elif step == 2:
             converted_data = step2_bisulfite_convert(args, blocks_data)
