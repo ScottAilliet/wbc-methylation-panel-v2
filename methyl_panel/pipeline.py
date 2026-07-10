@@ -27,6 +27,10 @@ Steps:
     7. Primer-dimer prediction (DimerDetective)
     8. Generate XLSX output (U-assays format)
     9. Generate PDF output (U-assays format)
+   10. Multiplexing compatibility filter (select 1 assay per cell type)  [--multiplex-dirs]
+
+Step 10 is NOT included in --steps all. It requires all per-cell-type runs
+to be complete first. Use --steps 10 --multiplex-dirs results/MONO,results/BCELL,...
 """
 
 import os
@@ -479,6 +483,67 @@ def step9_pdf(args, primers_data=None):
     print(f"  PDF saved to {out_path}")
 
 
+def step10_multiplex(args):
+    """Step 10: Multiplexing compatibility filter — select one assay per cell type."""
+    from methyl_panel.phase10_multiplex import (
+        select_multiplex_panel, save_panel_json, save_panel_xlsx, save_panel_pdf,
+    )
+
+    print("\n=== Step 10: Multiplexing Compatibility Filter ===")
+
+    if not args.multiplex_dirs:
+        raise ValueError(
+            "--multiplex-dirs is required for step 10. "
+            "Provide a comma-separated list of per-cell-type output directories, "
+            "e.g. --multiplex-dirs results/MONO,results/BCELL,results/NK,..."
+        )
+
+    # Parse multiplex dirs — auto-detect cell type from directory name
+    dirs = [d.strip() for d in args.multiplex_dirs.split(",")]
+    cell_type_dirs = {}
+    for d in dirs:
+        ct = os.path.basename(os.path.normpath(d))
+        cell_type_dirs[ct] = d
+
+    print(f"  Cell types: {list(cell_type_dirs.keys())}")
+    print(f"  Criteria: dimer cutoff={args.cross_dimer_cutoff}, "
+          f"tm tol={args.tm_tolerance}, min amp diff={args.min_amplicon_diff}")
+
+    opt_tm = args.opt_tm if args.opt_tm else 60.0
+
+    panel = select_multiplex_panel(
+        cell_type_dirs,
+        opt_tm=opt_tm,
+        cross_dimer_cutoff=args.cross_dimer_cutoff,
+        tm_tolerance=args.tm_tolerance,
+        min_amplicon_diff=args.min_amplicon_diff,
+    )
+
+    # Save outputs
+    json_path = save_panel_json(
+        panel, os.path.join(args.output_dir, "multiplex_panel.json"))
+    print(f"\n  Panel JSON: {json_path}")
+
+    xlsx_path = save_panel_xlsx(
+        panel, os.path.join(args.output_dir, "multiplex_panel.xlsx"))
+    print(f"  Panel XLSX: {xlsx_path}")
+
+    pdf_path = save_panel_pdf(
+        panel, os.path.join(args.output_dir, "multiplex_panel.pdf"))
+    print(f"  Panel PDF: {pdf_path}")
+
+    # Summary
+    print(f"\n  Selected: {panel.n_cell_types_selected}/{panel.n_cell_types_requested} cell types")
+    if panel.failed_cell_types:
+        print(f"  Failed: {', '.join(panel.failed_cell_types)}")
+    for a in panel.selected_assays:
+        print(f"    {a['cell_type_id']}: {a['assay_id']} "
+              f"(q={a['quality_score']:.3f}, Tm={a['left_tm']:.1f}/{a['right_tm']:.1f}, "
+              f"product={a['product_size']}bp)")
+
+    return panel
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="WBC Methylation Panel — Primer Design Pipeline",
@@ -528,24 +593,42 @@ def main():
     parser.add_argument("--skip-find-markers", action="store_true",
                         help="Skip find_markers (reuse existing BED output)")
 
+    # --- Step 10: Multiplexing arguments ---
+    parser.add_argument("--multiplex-dirs",
+                        help="Comma-separated list of per-cell-type output dirs for "
+                             "multiplex selection (e.g. results/MONO,results/BCELL,...). "
+                             "Required for step 10.")
+    parser.add_argument("--cross-dimer-cutoff", type=float, default=-1.0,
+                        help="Cross-dimer ΔG cutoff for multiplex (kcal/mol, default -1.0)")
+    parser.add_argument("--tm-tolerance", type=float, default=2.0,
+                        help="Max Tm spread across compatible assays (°C, default 2.0)")
+    parser.add_argument("--min-amplicon-diff", type=int, default=10,
+                        help="Min product size difference for multiplex (bp, default 10)")
+
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # If --discover-dmrs is set, replace step 1 with step 0
-    if args.discover_dmrs:
-        if args.steps == "all":
-            steps = [0, 2, 3, 4, 5, 6, 7, 8, 9]
-        else:
-            steps = [int(s.strip()) for s in args.steps.split(",")]
-            # If user specified step 1 with --discover-dmrs, replace with 0
-            steps = [0 if s == 1 else s for s in steps]
+    # Parse steps — supports "all", "all,10", "0,2,3", "10", etc.
+    # Step 10 (multiplex) is never in "all" by itself — it requires multiple
+    # cell-type runs to be complete first. Use --steps 10 or --steps all,10.
+    raw_steps = args.steps.split(",")
+    raw_steps = [s.strip() for s in raw_steps]
+    has_all = "all" in raw_steps
+    explicit_steps = [int(s) for s in raw_steps if s != "all"]
+
+    if has_all:
+        base_steps = [0, 2, 3, 4, 5, 6, 7, 8, 9] if args.discover_dmrs else [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        steps = base_steps + [s for s in explicit_steps if s not in base_steps]
     else:
-        # Parse steps normally
-        if args.steps == "all":
-            steps = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        else:
-            steps = [int(s.strip()) for s in args.steps.split(",")]
+        steps = explicit_steps
+        # If --discover-dmrs and user specified step 1, replace with 0
+        if args.discover_dmrs:
+            steps = [0 if s == 1 else s for s in steps]
+
+    # Validate --multiplex-dirs when step 10 is requested
+    if 10 in steps and args.multiplex_dirs is None:
+        parser.error("--multiplex-dirs is required when step 10 is in --steps.")
 
     # Validate Tm is set for primer design steps
     if any(s in steps for s in [3]) and not all([args.min_tm, args.opt_tm, args.max_tm]):
@@ -579,6 +662,8 @@ def main():
             step8_xlsx(args, primers_data)
         elif step == 9:
             step9_pdf(args, primers_data)
+        elif step == 10:
+            step10_multiplex(args)
 
     print("\n=== Pipeline complete ===")
 
