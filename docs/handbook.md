@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.3.0
+**Version:** Pipeline v2.2.1
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-10
 
@@ -12,16 +12,13 @@
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
 
-### What Changed in v2.3.0
+### What Changed in v2.2.1
 
-This version adds a **multiplexing compatibility filter** (Step 10) that selects one assay per cell type for multiplexed dPCR, ensuring the selected assays are mutually compatible.
+This version restricts the DMR discovery background to **blood cells only**. Previously, find_markers used all 207 atlas samples (including liver, brain, colon, etc.) as background. For a WBC assay, this is biologically incorrect — the DMRs must distinguish the target cell type from other blood cells, not from non-blood tissues. Now only the 36 blood samples (14 blood cell types) are used as background.
 
-Key changes:
+Key change:
 
-1. **New Step 10 (Multiplexing):** After running all 7 cell types individually, Step 10 loads all primers.json files, computes cross-assay compatibility (cross-dimer, Tm matching, amplicon size separation), and selects one assay per cell type using a greedy-by-quality algorithm with backtracking.
-2. **New module:** `phase10_multiplex.py` — cross-dimer scoring (8 orientations via primer3.calc_end_stability), Tm spread checking, amplicon size separation, quality ranking, greedy selection, JSON/XLSX/PDF output.
-3. **Three compatibility criteria:** Cross-dimer ΔG ≥ -1.0 kcal/mol (same DimerDetective method as Step 7), Tm spread ≤ 2.0°C across all 4 primers, amplicon size difference ≥ 10 bp.
-4. **Step 10 is not in `--steps all`:** It requires all per-cell-type runs to be complete first. Use `--steps 10 --multiplex-dirs results/MONO,results/BCELL,...`.
+1. **Blood-only background:** `generate_groups_file()` now filters to `Blood-*` groups only. Each cell type's background is the other blood cell types (e.g. MONO background = B, NK, granulocytes, T cells = 33 samples; CD3T background = B, NK, granulocytes, monocytes = 14 samples).
 
 ### What Changed in v2.2.0
 
@@ -353,7 +350,6 @@ Then run `./download_data.sh` — it will skip what you already have and downloa
 | 7 | `phase7_dimer` | Predict primer-dimer formation (DimerDetective) | No |
 | 8 | `output_xlsx` | Generate U-assays-style Excel output (27 columns) | No |
 | 9 | `output_pdf` | Generate U-assays-style PDF (one page per primer pair) | No |
-| 10 | `phase10_multiplex` | Select 1 assay per cell type for multiplexed dPCR | No (requires all cell-type runs done) |
 
 **Step 0 vs Step 1:** You use either Step 0 (`--discover-dmrs`) or Step 1 (default), not both. Step 0 discovers DMRs from raw beta files. Step 1 loads them from a pre-computed Excel file. Both produce the same `dmr_blocks.json` output that steps 2–9 consume.
 
@@ -389,7 +385,7 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 - `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
 
 **What Step 0 does:**
-1. Generates a groups CSV file — target samples (your cell type) vs background (all other samples in the atlas)
+1. Generates a groups CSV file — target samples (your cell type) vs background (other blood cell types only)
 2. Generates a beta list file — paths to all .beta files
 3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs (delta_means ≥ 0.3, min 3 CpGs, top 200)
 4. Parses the output BED file
@@ -461,19 +457,19 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
     --output-dir results/CD8T/
 ```
 
-Cell type IDs and their target samples in the atlas:
+Cell type IDs and their target samples in the atlas. Background is always the other blood cell types (36 total blood samples minus target samples):
 
-| Cell type | ID | Atlas groups (target samples) | # Samples |
-|-----------|-----|-------------------------------|-----------|
-| Monocytes | `MONO` | Blood-Monocytes | 3 |
-| B cells | `BCELL` | Blood-B, Blood-B-Mem | 5 |
-| NK cells | `NK` | Blood-NK | 3 |
-| Granulocytes | `GRAN` | Blood-Granulocytes | 3 |
-| CD3 T cells (pan-T) | `CD3T` | All Blood-T-* groups | 22 |
-| CD8 T cells | `CD8T` | Blood-T-CD8, Blood-T-Eff-CD8, Blood-T-EffMem-CD8, Blood-T-Naive-CD8 | 10 |
-| CD4 T cells | `CD4T` | Blood-T-CD4, Blood-T-CenMem-CD4, Blood-T-EffMem-CD4, Blood-T-Naive-CD4 | 10 |
+| Cell type | ID | Atlas groups (target) | # Target | # Background |
+|-----------|-----|------------------------|----------|--------------|
+| Monocytes | `MONO` | Blood-Monocytes | 3 | 33 |
+| B cells | `BCELL` | Blood-B, Blood-B-Mem | 5 | 31 |
+| NK cells | `NK` | Blood-NK | 3 | 33 |
+| Granulocytes | `GRAN` | Blood-Granulocytes | 3 | 33 |
+| CD3 T cells (pan-T) | `CD3T` | All Blood-T-* groups | 22 | 14 |
+| CD8 T cells | `CD8T` | Blood-T-CD8, Blood-T-Eff-CD8, Blood-T-EffMem-CD8, Blood-T-Naive-CD8 | 10 | 26 |
+| CD4 T cells | `CD4T` | Blood-T-CD4, Blood-T-CenMem-CD4, Blood-T-EffMem-CD4, Blood-T-Naive-CD4 | 10 | 26 |
 
-When using `--discover-dmrs`, the pipeline automatically merges these atlas groups into one target population. All other 207 samples in the atlas serve as background.
+When using `--discover-dmrs`, the pipeline automatically merges these atlas groups into one target population. The background is restricted to other blood cell types only (36 blood samples total) — not the full atlas — because this is a WBC assay that needs to distinguish the target from other blood cells.
 
 ### 3.7 Running All 7 Cell Types
 
@@ -544,54 +540,6 @@ python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 --discover-dmrs \
     --output-dir results/test/
 ```
 
-### 3.10 Running the Multiplex Filter (Step 10)
-
-After you have run all 7 cell types individually (Section 3.7), Step 10 selects one assay per cell type that are mutually compatible for multiplexed dPCR — meaning all 7 assays can run in a single reaction without interfering with each other.
-
-**What it checks:**
-
-1. **Cross-dimer formation** — every primer from assay A is checked against every primer from assay B (8 orientations per pair). If any cross-dimer is too stable (ΔG < -1.0 kcal/mol), the pair is incompatible. This is the same DimerDetective method used in Step 7, but applied *between* assays instead of *within* a single assay.
-
-2. **Tm matching** — the Tm spread across all 4 primers in the two assays must be ≤ 2.0°C. This ensures all primers anneal at the same temperature in the multiplex reaction.
-
-3. **Amplicon size separation** — the product sizes must differ by ≥ 10 bp. This allows you to distinguish products by gel or capillary electrophoresis during QC.
-
-**How it selects:**
-
-Each assay is ranked by a composite quality score (DMR cleanliness 40%, Primer3 penalty 25%, self-dimer risk 15%, bowtie specificity 10%, Tm closeness 10%). The algorithm processes cell types with the fewest available assays first, greedily picks the best-ranked assay that is compatible with all already-selected assays, and backtracks if stuck.
-
-**Running it:**
-
-```bash
-python -m methyl_panel.pipeline --steps 10 \
-    --multiplex-dirs results/MONO,results/BCELL,results/NK,results/GRAN,results/CD3T,results/CD8T,results/CD4T \
-    --opt-tm 60 \
-    --output-dir results/multiplex/
-```
-
-**Adjusting the criteria:**
-
-```bash
-# Stricter cross-dimer cutoff (fewer false dimers, may fail more often)
---cross-dimer-cutoff -0.5
-
-# Wider Tm tolerance (if your thermocycler has less precise temperature control)
---tm-tolerance 3.0
-
-# Smaller amplicon separation (if you don't need gel distinction)
---min-amplicon-diff 5
-```
-
-**What you get:**
-
-| File | Description |
-|------|-------------|
-| `multiplex_panel.json` | Selected assays, full compatibility matrix, selection log |
-| `multiplex_panel.xlsx` | 3 sheets: "Multiplex panel" (selected assays), "Compatibility matrix" (pairwise checks), "Selection log" (step-by-step) |
-| `multiplex_panel.pdf` | Summary page + one page per selected assay (same format as primer_assays.pdf) |
-
-If a cell type has no assay compatible with the others, it is listed as "failed" in the output. You can then relax the criteria or re-run that cell type with different parameters to get more candidates.
-
 ---
 
 ## Chapter 4 — Understanding the Output
@@ -610,14 +558,6 @@ After running the pipeline, the output directory contains:
 | `primers.json` | All primer pairs with QC results (updated by each step) |
 | `primer_assays.xlsx` | U-assays-style Excel output (27 columns) |
 | `primer_assays.pdf` | U-assays-style PDF (one page per primer pair) |
-
-**Multiplex output (Step 10, in the multiplex output directory):**
-
-| File | Description |
-|------|-------------|
-| `multiplex_panel.json` | Selected assays, compatibility matrix, selection log |
-| `multiplex_panel.xlsx` | 3 sheets: selected assays, compatibility matrix, selection log |
-| `multiplex_panel.pdf` | Summary page + one page per selected assay |
 
 ### 4.2 Excel Output Columns (27 columns)
 
@@ -830,14 +770,6 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Cause:** The first 10 blocks by delta_means may have only 3–4 CpGs, below the `--min-cpg 5` threshold
 - **Solution:** Use `--max-blocks 50` or more. The first blocks ranked by delta_means tend to have fewer CpGs; blocks with 5+ CpGs appear later in the ranking.
 
-**Problem:** Step 10 reports `Failed: MONO, BCELL, ...` (cell types with no compatible assay)
-- **Cause:** No assay in that cell type is compatible with the already-selected assays under the current criteria. This is common when cell types share similar primer sequences or when criteria are strict.
-- **Solution:** Relax one or more criteria: `--cross-dimer-cutoff -1.5` (allow more dimer risk), `--tm-tolerance 3.0` (wider Tm window), `--min-amplicon-diff 5` (smaller size separation). Or re-run the failed cell type with `--top-markers 400` to discover more DMR candidates, giving the multiplex filter more assays to choose from.
-
-**Problem:** `--multiplex-dirs is required when step 10 is in --steps`
-- **Cause:** You specified `--steps 10` (or `--steps all,10`) but did not provide `--multiplex-dirs`
-- **Solution:** Add `--multiplex-dirs` with a comma-separated list of per-cell-type output directories, e.g. `--multiplex-dirs results/MONO,results/BCELL,results/NK,...`
-
 **Problem:** `samtools faidx failed` or `No sequence returned`
 - **Cause:** hg19 genome FASTA not found, not indexed, or the chromosome is not in the genome
 - **Solution:** Run `./download_data.sh` to download and index the genome. If only some chromosomes are available, blocks on missing chromosomes are automatically skipped.
@@ -919,15 +851,14 @@ wbc-methylation-panel-v2/
 │   ├── phase6_snp.py                # Step 6: dbSNP common variant screening
 │   ├── phase7_dimer.py              # Step 7: DimerDetective primer-dimer prediction
 │   ├── output_xlsx.py               # Step 8: U-assays-style Excel output
-│   ├── output_pdf.py                # Step 9: U-assays-style PDF output
-│   └── phase10_multiplex.py         # Step 10: Multiplexing compatibility filter
+│   └── output_pdf.py                # Step 9: U-assays-style PDF output
 ├── data/                            # Data files
 │   ├── full_atlas_manifest.csv      # 207 sample download manifest
 │   ├── full_atlas_groups.csv        # Full atlas cell type groups (82 types)
 │   ├── immune_groups.csv            # Immune cell type groups (7 types)
 │   └── download_list_nonimmune.csv  # Non-immune sample download list
 ├── docs/
-│   ├── handbook.md                  # This document (v2.3.0)
+│   ├── handbook.md                  # This document (v2.2.1)
 │   ├── handbook_v2.2.md             # Previous handbook version (preserved)
 │   ├── handbook_v2.1.md             # Previous handbook version (preserved)
 │   ├── handbook_v1.md               # Original handbook version (preserved)
@@ -962,8 +893,6 @@ Dataset: [GSE186458](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE18645
 | **SM/AM** | Sense/Antisense Methylated — bisulfite-converted strand with CpG C's preserved |
 | **SU/AU** | Sense/Antisense Unmethylated — bisulfite-converted strand with all C→T |
 | **DimerDetective** | A primer-dimer prediction method based on 3' end thermodynamic stability |
-| **Multiplex panel** | A set of assays (one per cell type) selected to be mutually compatible for a single dPCR reaction |
-| **Cross-dimer** | A primer-dimer forming between primers from *different* assays (checked in Step 10) |
 | **U-assays** | The output format (XLSX + PDF) matching the reference assay tracking format |
 | **wgbstools** | Tools for analyzing whole-genome bisulfite sequencing data |
 | **Beta file** | Binary methylation data file (2 bytes per CpG: methylated count + total count) |
@@ -1019,33 +948,18 @@ done
 ```
 
 ```bash
-# Select 1 assay per cell type for multiplexed dPCR
-python -m methyl_panel.pipeline --steps 10 \
-    --multiplex-dirs results/MONO,results/BCELL,results/NK,results/GRAN,results/CD3T,results/CD8T,results/CD4T \
-    --opt-tm 60 \
-    --output-dir results/multiplex/
-```
-
-```bash
 open results/MONO/primer_assays.xlsx
-open results/multiplex/multiplex_panel.xlsx
-open results/multiplex/multiplex_panel.pdf
+open results/MONO/primer_assays.pdf
 ```
 
 ---
 
 ## Appendix C — Change Log
 
-### v2.3.0 (2026-07-10)
+### v2.2.1 (2026-07-10)
 
-**New feature — Multiplexing compatibility filter:**
-- `phase10_multiplex.py`: New module implementing Step 10. Loads primers.json and dmr_blocks.json from all per-cell-type output directories, computes pairwise cross-assay compatibility (cross-dimer ΔG via 8-orientation primer3.calc_end_stability, Tm spread, amplicon size difference), ranks assays by composite quality score, and selects one assay per cell type using greedy-by-quality selection with bounded backtracking.
-- `pipeline.py`: Added `step10_multiplex()` and new CLI arguments (`--multiplex-dirs`, `--cross-dimer-cutoff`, `--tm-tolerance`, `--min-amplicon-diff`). Step 10 is not included in `--steps all` — use `--steps 10` or `--steps all,10`.
-- Three compatibility criteria: cross-dimer ΔG ≥ -1.0 kcal/mol (same DimerDetective method as Step 7, 8 orientations), Tm spread ≤ 2.0°C across all 4 primers, amplicon size difference ≥ 10 bp.
-- Quality score: DMR cleanliness (40%), Primer3 penalty (25%), self-dimer tier (15%), bowtie specificity (10%), Tm closeness (10%).
-- Outputs: `multiplex_panel.json` (selected assays + compatibility matrix + selection log), `multiplex_panel.xlsx` (3 sheets: panel, compatibility matrix, selection log), `multiplex_panel.pdf` (summary page + one page per selected assay).
-
-**Verified by sandbox testing:** 3 cell types with 12 assays each. Default criteria: 3/3 selected with correct greedy selection and backtracking. Relaxed criteria: higher-ranked assays selected (confirming criteria constrain selection). Edge case: cell type with 1 assay correctly causes cascading failure when incompatible.
+- `phase0_dmr_discovery.py`: Background restricted to blood cell types only. Previously, `generate_groups_file()` used all 207 atlas samples as background (including liver, brain, colon, etc.). Now only the 36 blood samples (14 `Blood-*` groups) are used. This is biologically correct for a WBC assay — DMRs must distinguish the target from other blood cells, not from non-blood tissues. Added `BLOOD_GROUPS` constant listing all 14 blood cell type group names.
+- Removed multiplex Step 10 (`phase10_multiplex.py`) and all associated CLI arguments (`--multiplex-dirs`, `--cross-dimer-cutoff`, `--tm-tolerance`, `--min-amplicon-diff`).
 
 ### v2.2.0 (2026-07-10)
 

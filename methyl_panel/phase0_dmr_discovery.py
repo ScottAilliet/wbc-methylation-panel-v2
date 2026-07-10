@@ -47,8 +47,9 @@ from methyl_panel.phase1_dmr_loader import DMRBlock, CpGSite
 # Cell type → target groups mapping
 # ---------------------------------------------------------------------------
 # Each cell type ID maps to a list of atlas group names that constitute
-# the target population. All other samples in the atlas are background.
-# This matches repo 1's wbc_groups file approach.
+# the target population. Background is restricted to other blood cell
+# types only — this is a WBC assay, so we need to distinguish monocytes
+# from other blood cells, not from liver or brain tissue.
 CELL_TYPE_TARGETS: Dict[str, List[str]] = {
     "MONO":  ["Blood-Monocytes"],
     "BCELL": ["Blood-B", "Blood-B-Mem"],
@@ -69,6 +70,16 @@ CELL_TYPE_TARGETS: Dict[str, List[str]] = {
     ],
 }
 
+# All blood cell type groups in the atlas (14 groups, 36 samples total).
+# Background for any WBC assay is restricted to these groups minus the
+# target groups for the cell type being assayed.
+BLOOD_GROUPS: List[str] = [
+    "Blood-B", "Blood-B-Mem", "Blood-Granulocytes", "Blood-Monocytes",
+    "Blood-NK", "Blood-T-CD3", "Blood-T-CD4", "Blood-T-CD8",
+    "Blood-T-CenMem-CD4", "Blood-T-Eff-CD8", "Blood-T-EffMem-CD4",
+    "Blood-T-EffMem-CD8", "Blood-T-Naive-CD4", "Blood-T-Naive-CD8",
+]
+
 # All valid cell type IDs
 VALID_CELL_TYPES = list(CELL_TYPE_TARGETS.keys())
 
@@ -86,7 +97,9 @@ def generate_groups_file(
     Generate a wgbstools-compatible groups CSV for one cell type.
 
     Target samples (all subtypes merged) get group = cell_type_id.
-    All other samples get group = 'background'.
+    Background is restricted to other blood cell types only — this is
+    a WBC assay, so we distinguish the target from other blood cells,
+    not from non-blood tissues.
 
     If beta_dir is provided, only samples that have a corresponding
     .beta file in that directory are included in the groups file.
@@ -109,6 +122,9 @@ def generate_groups_file(
 
     target_groups = CELL_TYPE_TARGETS[cell_type_id]
     df = pd.read_csv(atlas_groups_csv)
+
+    # Restrict to blood cell types only (exclude non-blood tissues)
+    df = df[df['group'].isin(BLOOD_GROUPS)].copy()
 
     # The atlas groups CSV has columns: name, group
     # wgbstools renames the first column to 'fname', so 'name' is fine
