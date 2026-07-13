@@ -754,14 +754,23 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Solution:** Run `chmod +x install_macos.sh` (or `chmod +x download_data.sh`), then run the script again.
 
 **Problem:** `git pull` fails with "Your local changes to the following files would be overwritten by merge"
-- **Cause:** You modified a file locally (e.g. `chmod +x` changed the file, or you edited it) and the remote version also changed.
-- **Solution:** Discard your local copy and take the remote version:
+- **Cause:** You modified a file locally (e.g. `chmod +x` changed the file, or you edited it) and the remote version also changed. The error message names the conflicting file(s).
+- **Solution:** Discard your local copy of the conflicting file(s) and take the remote version. For each file listed in the error message:
   ```bash
-  git checkout -- download_data.sh
-  git pull
-  chmod +x download_data.sh
+  git checkout -- <filename>
   ```
-  `git checkout --` replaces your local file with the last committed version. Then `git pull` gets the fix. Then `chmod +x` because `git checkout --` resets permissions.
+  Then pull and restore permissions:
+  ```bash
+  git pull
+  chmod +x install_macos.sh download_data.sh
+  ```
+  Example: if the error says `install_macos.sh` would be overwritten:
+  ```bash
+  git checkout -- install_macos.sh
+  git pull
+  chmod +x install_macos.sh download_data.sh
+  ```
+  `git checkout -- <filename>` replaces your local file with the last committed version. Then `git pull` gets the latest changes. Then `chmod +x` because `git checkout --` resets file permissions.
 
 **Problem:** `pip install -e .` fails with `ModuleOrPackageNotFoundError: No file/folder found for package wgbs-tools`
 - **Cause:** wgbstools is not a standard Python package — it has no `__init__.py` and its `pyproject.toml` has the `packages` line commented out. Poetry cannot find a package to install.
