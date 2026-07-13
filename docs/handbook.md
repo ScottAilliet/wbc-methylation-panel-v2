@@ -812,7 +812,16 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
   ```
   Note: `pip install -e .` does NOT work for wgbstools — the package has no `__init__.py` and `pyproject.toml` has the packages line commented out. The symlink approach is the correct installation method.
 
-**Problem:** `wgbstools find_markers failed with return code 1`
+**Problem:** `wgbstools find_markers failed with return code 1` with `ModuleNotFoundError: No module named 'scipy'`
+- **Cause:** wgbstools is a Python script with shebang `#!/usr/bin/env python3`. When run as a subprocess, `env python3` may resolve to a different Python than your venv (e.g. conda's `base` Python), which doesn't have scipy installed.
+- **Solution:** This is fixed in the pipeline — it now explicitly invokes wgbstools via the venv Python (`sys.executable`), which has scipy. If you still see this error after `git pull`, verify scipy is installed in the venv:
+  ```bash
+  source .venv/bin/activate
+  python -c "import scipy; print(scipy.__version__)"
+  ```
+  If scipy is missing, install it: `pip install scipy`
+
+**Problem:** `wgbstools find_markers failed with return code 1` (other causes)
 - **Cause:** Missing beta files, blocks file, or groups file. Or insufficient memory.
 - **Solution:** Ensure `data/beta_files/` has all 207 .beta files (run `./download_data.sh`). Ensure `data/GSE186458_blocks.s205.bed.gz` exists. Check the error message printed by find_markers.
 

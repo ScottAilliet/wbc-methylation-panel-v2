@@ -213,6 +213,21 @@ def find_wgbstools(wgbstools_path: Optional[str] = None) -> str:
     )
 
 
+def _find_venv_python() -> Optional[str]:
+    """
+    Find the Python executable in the active virtual environment.
+
+    wgbstools is a Python script with shebang '#!/usr/bin/env python3'.
+    When run as a subprocess, 'env python3' may resolve to a different
+    Python than the venv (e.g. conda base), which won't have scipy.
+    We explicitly invoke wgbstools via the venv Python to fix this.
+    """
+    # sys.executable is the Python running this module — should be the venv
+    if sys.executable and os.path.isfile(sys.executable):
+        return sys.executable
+    return None
+
+
 def run_find_markers(
     groups_file: str,
     beta_list: str,
@@ -246,8 +261,17 @@ def run_find_markers(
     wgbstools = find_wgbstools(wgbstools_path)
     os.makedirs(out_dir, exist_ok=True)
 
-    cmd = [
-        wgbstools, 'find_markers',
+    # wgbstools is a Python script with shebang '#!/usr/bin/env python3'.
+    # When run directly as a subprocess, 'env python3' may resolve to a
+    # different Python than the venv (e.g. conda base), which won't have
+    # scipy installed. We explicitly invoke it via the venv Python.
+    venv_python = _find_venv_python()
+    if venv_python:
+        cmd = [venv_python, wgbstools, 'find_markers']
+    else:
+        cmd = [wgbstools, 'find_markers']
+
+    cmd.extend([
         '--blocks_path', blocks_file,
         '--groups_file', groups_file,
         '--beta_list_file', beta_list,
@@ -260,7 +284,7 @@ def run_find_markers(
         '--header',
         '--threads', str(threads),
         '--out_dir', out_dir,
-    ]
+    ])
 
     print(f"  Running: {' '.join(cmd[:6])} ... --out_dir {out_dir}")
     result = subprocess.run(
