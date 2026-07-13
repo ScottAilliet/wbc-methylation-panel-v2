@@ -569,6 +569,75 @@ python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 --discover-dmrs \
     --output-dir results/test/
 ```
 
+### 3.10 Exporting DMR Regions to Excel
+
+The pipeline's main output is primer assays (Section 4). If you also want the DMR regions themselves — the top N blocks per cell type with per-CpG methylation values — use the `export_dmr_excel.py` script.
+
+**Export all 7 cell types (one sheet each + per-CpG detail):**
+
+```bash
+source .venv/bin/activate
+
+python export_dmr_excel.py results/*/dmr_blocks.json --top 200 -o dmr_regions.xlsx
+```
+
+**Export a single cell type:**
+
+```bash
+python export_dmr_excel.py results/MONO/dmr_blocks.json --top 200 -o dmr_MONO.xlsx
+```
+
+**Arguments:**
+- First argument: path(s) to `dmr_blocks.json` file(s). Supports glob patterns (`results/*/dmr_blocks.json`).
+- `--top N`: Number of top DMR regions per cell type (default: 200). Regions are ranked by `delta_means` (methylation difference between target and background).
+- `-o PATH`: Output Excel file path (default: `dmr_regions.xlsx`).
+
+**Output Excel structure:**
+
+| Sheet | Content |
+|-------|---------|
+| `All blocks summary` | All DMR blocks across all cell types (one row per block) |
+| `MONO`, `BCELL`, `NK`, ... | One sheet per cell type, top N blocks (one row per block) |
+| `Per-CpG detail` | Every CpG site across all blocks (one row per CpG) |
+
+**Block-level columns** (in each cell type sheet and the summary):
+
+| Column | Description |
+|--------|-------------|
+| Cell type | MONO, BCELL, NK, etc. |
+| Rank | DMR rank by delta_means (1 = largest methylation difference) |
+| Seq ID | Block identifier (e.g. MONO_0001) |
+| Chromosome | Chromosome (e.g. chr16) |
+| Start | Genomic start position (1-based, hg19) |
+| End | Genomic end position (1-based, hg19) |
+| Block length (bp) | Length of the DMR block |
+| # CpGs | Number of CpG sites in the block |
+| Gene | Associated gene name |
+| Annotation | Genomic annotation (e.g. promoter-TSS, intron, intergenic) |
+| Target mean methylation | Mean methylation across target samples (should be near 0 for hypo-DMRs) |
+| Background mean methylation | Mean methylation across background blood samples (should be near 1) |
+| Delta means | Difference between background and target methylation |
+| Cleanliness score | 5-component score (0–1, higher = better primer candidate) |
+
+**Per-CpG columns** (in the Per-CpG detail sheet):
+
+| Column | Description |
+|--------|-------------|
+| Cell type | MONO, BCELL, NK, etc. |
+| Seq ID | Parent block identifier |
+| Rank | Parent block rank |
+| Chromosome | Chromosome |
+| Block start / Block end | Parent block coordinates |
+| Gene | Associated gene |
+| CpG label | CpG_1, CpG_2, etc. (position within block) |
+| CpG position | Genomic position (hg19) |
+| CpG index | Global CpG index in the genome |
+| Target mean beta | Mean methylation at this CpG across target samples |
+| Background mean beta | Mean methylation at this CpG across background samples |
+| Delta beta | Absolute methylation difference at this CpG |
+
+**Prerequisites:** You must have already run Step 0 (`--discover-dmrs`) for each cell type you want to export. The script reads the `dmr_blocks.json` files from the output directories.
+
 ---
 
 ## Chapter 4 — Understanding the Output
@@ -587,6 +656,8 @@ After running the pipeline, the output directory contains:
 | `primers.json` | All primer pairs with QC results (updated by each step) |
 | `primer_assays.xlsx` | U-assays-style Excel output (27 columns) |
 | `primer_assays.pdf` | U-assays-style PDF (one page per primer pair) |
+
+The `export_dmr_excel.py` script (Section 3.10) can additionally produce `dmr_regions.xlsx` — a separate Excel with the DMR regions and per-CpG methylation values, which is useful if you want to inspect the DMRs themselves rather than the primer assays.
 
 ### 4.2 Excel Output Columns (27 columns)
 
@@ -939,6 +1010,7 @@ wbc-methylation-panel-v2/
 │   └── materials_and_methods.md     # Scientific methods reference
 ├── install_macos.sh                 # macOS installation script
 ├── download_data.sh                 # Data download script (~15 GB)
+├── export_dmr_excel.py              # Export DMR regions + per-CpG methylation to Excel
 ├── README.md                        # Project overview
 └── .gitignore
 ```
@@ -1032,6 +1104,7 @@ open results/MONO/primer_assays.pdf
 
 ### v2.2.2 (2026-07-13)
 
+- `export_dmr_excel.py`: New script that exports DMR regions with per-CpG methylation to Excel. Reads `dmr_blocks.json` files from pipeline output directories and produces a multi-sheet workbook: one sheet per cell type (block-level summary), an "All blocks summary" sheet, and a "Per-CpG detail" sheet with one row per CpG site. Use `--top N` to control how many regions per cell type (default 200).
 - `pipeline.py`, `phase0_dmr_discovery.py`, `config.py`: Default `--top-markers` changed from 200 to 300. find_markers now returns the top 300 DMR candidates per cell type (was 200). Override with `--top-markers N` for any other number.
 - `phase0_dmr_discovery.py`: Added scipy pre-check in `run_find_markers()`. Before invoking wgbstools, the pipeline runs `import scipy` in the venv Python. If scipy is missing, it raises a `RuntimeError` with the exact install command (`<venv_python> -m pip install scipy`) instead of letting wgbstools crash with `ModuleNotFoundError: No module named 'scipy'`.
 - `install_macos.sh`: Added scipy re-verification after the wgbstools install step. If scipy was rolled back by a failed `pip install -e .` (as happened on macOS), the script automatically reinstalls it.
