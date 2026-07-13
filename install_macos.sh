@@ -88,6 +88,14 @@ fi
 
 echo "✓ wgbstools available: $(which wgbstools 2>/dev/null || echo 'NOT FOUND')"
 
+# Re-verify scipy after wgbstools install — the failed pip install -e .
+# in older versions of this script could roll back scipy.
+if ! python3 -c "import scipy" 2>/dev/null; then
+    echo "  scipy was lost during wgbstools install, reinstalling..."
+    pip install scipy
+fi
+echo "✓ scipy verified"
+
 # NOTE: init_genome is NOT needed for the pipeline.
 # find_markers works directly with the blocks file and beta files.
 # The pipeline finds CpG positions by scanning the genomic sequence

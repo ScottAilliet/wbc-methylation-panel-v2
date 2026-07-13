@@ -271,6 +271,20 @@ def run_find_markers(
     else:
         cmd = [wgbstools, 'find_markers']
 
+    # Pre-check: verify scipy is available in the Python that will run wgbstools.
+    # find_markers requires scipy.stats.mannwhitneyu and will crash without it.
+    check_py = cmd[0]
+    scipy_check = subprocess.run(
+        [check_py, '-c', 'import scipy; print(scipy.__version__)'],
+        capture_output=True, text=True
+    )
+    if scipy_check.returncode != 0:
+        raise RuntimeError(
+            f"scipy is not installed in the Python that runs wgbstools "
+            f"({check_py}). find_markers requires scipy. "
+            f"Install it with: {check_py} -m pip install scipy"
+        )
+
     cmd.extend([
         '--blocks_path', blocks_file,
         '--groups_file', groups_file,
