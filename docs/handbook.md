@@ -1,8 +1,8 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.1
+**Version:** Pipeline v2.2.2
 **Repository:** `wbc-methylation-panel-v2`
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-13
 
 ---
 
@@ -11,6 +11,16 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
+
+### What Changed in v2.2.2
+
+This version changes the default number of DMR candidates per cell type from 200 to **300**, and adds a scipy pre-check to prevent cryptic crashes during DMR discovery.
+
+Key changes:
+
+1. **Top 300 markers (was 200):** `--top-markers` default changed from 200 to 300 in `pipeline.py`, `phase0_dmr_discovery.py`, and `config.py`. find_markers now returns the top 300 DMRs per cell type, giving primer3 more candidates to work with. You can still override with `--top-markers 200` or any other number.
+2. **scipy pre-check:** Before running `find_markers`, the pipeline now verifies that scipy is installed in the venv Python. If it's missing (e.g. rolled back by a failed `pip install -e .`), the pipeline prints the exact install command instead of letting wgbstools crash with an opaque traceback.
+3. **install_macos.sh:** Added scipy re-verification after the wgbstools install step — automatically reinstalls scipy if it was lost.
 
 ### What Changed in v2.2.1
 
@@ -400,13 +410,13 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 - `--blocks-file`: Path to blocks BED file (default: `data/GSE186458_blocks.s205.bed.gz`)
 - `--groups-csv`: Path to full atlas groups CSV (default: `data/full_atlas_groups.csv`)
 - `--threads`: Number of threads for find_markers (default: 2)
-- `--top-markers`: Number of top markers per cell type (default: 200)
+- `--top-markers`: Number of top markers per cell type (default: 300)
 - `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
 
 **What Step 0 does:**
 1. Generates a groups CSV file — target samples (your cell type) vs background (other blood cell types only)
 2. Generates a beta list file — paths to all .beta files
-3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs (delta_means ≥ 0.3, min 3 CpGs, top 200)
+3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs (delta_means ≥ 0.3, min 3 CpGs, top 300)
 4. Parses the output BED file
 5. Extracts per-CpG methylation from beta files for each DMR
 6. Computes cleanliness scores (target near-zero, background near-one, consistency, coverage)
@@ -1019,6 +1029,12 @@ open results/MONO/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.2.2 (2026-07-13)
+
+- `pipeline.py`, `phase0_dmr_discovery.py`, `config.py`: Default `--top-markers` changed from 200 to 300. find_markers now returns the top 300 DMR candidates per cell type (was 200). Override with `--top-markers N` for any other number.
+- `phase0_dmr_discovery.py`: Added scipy pre-check in `run_find_markers()`. Before invoking wgbstools, the pipeline runs `import scipy` in the venv Python. If scipy is missing, it raises a `RuntimeError` with the exact install command (`<venv_python> -m pip install scipy`) instead of letting wgbstools crash with `ModuleNotFoundError: No module named 'scipy'`.
+- `install_macos.sh`: Added scipy re-verification after the wgbstools install step. If scipy was rolled back by a failed `pip install -e .` (as happened on macOS), the script automatically reinstalls it.
 
 ### v2.2.1 (2026-07-10)
 

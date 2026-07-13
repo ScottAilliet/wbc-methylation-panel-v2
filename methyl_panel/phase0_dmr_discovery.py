@@ -235,7 +235,7 @@ def run_find_markers(
     out_dir: str,
     cell_type_id: str,
     threads: int = 2,
-    top_n: int = 200,
+    top_n: int = 300,
     delta_means: float = 0.3,
     min_cpg: int = 3,
     wgbstools_path: Optional[str] = None,
@@ -833,7 +833,7 @@ def discover_dmrs(
     groups_csv: str,
     out_dir: str,
     threads: int = 2,
-    top_n: int = 200,
+    top_n: int = 300,
     delta_means: float = 0.3,
     min_cpg: int = 3,
     wgbstools_path: Optional[str] = None,
@@ -947,7 +947,7 @@ def main():
     parser.add_argument('--output-dir', default='dmr_output/',
                         help='Output directory')
     parser.add_argument('--threads', type=int, default=2)
-    parser.add_argument('--top', type=int, default=200)
+    parser.add_argument('--top', type=int, default=300)
     parser.add_argument('--max-bg-samples', type=int, default=30)
     parser.add_argument('--skip-find-markers', action='store_true',
                         help='Skip find_markers (use existing BED)')

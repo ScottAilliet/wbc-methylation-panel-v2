@@ -521,7 +521,7 @@ def main():
                         help="Path to wgbstools executable (auto-detected if omitted)")
     parser.add_argument("--threads", type=int, default=2,
                         help="Number of threads for find_markers")
-    parser.add_argument("--top-markers", type=int, default=200,
+    parser.add_argument("--top-markers", type=int, default=300,
                         help="Number of top markers per cell type")
     parser.add_argument("--max-bg-samples", type=int, default=30,
                         help="Max background samples for per-CpG extraction")
