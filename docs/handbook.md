@@ -270,6 +270,25 @@ ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
 wgbstools --version
 ```
 
+### 1.2 Updating the Pipeline
+
+When a new version is released (bug fixes, new features), update your local copy:
+
+```bash
+cd ~/wbc-methylation-panel-v2
+git pull
+```
+
+If `git pull` fails with "Your local changes would be overwritten", see the troubleshooting section (Chapter 7). After updating, you may need to re-run `./install_macos.sh` if dependencies changed.
+
+To verify you have the latest version:
+
+```bash
+git log --oneline -1
+```
+
+Check the [change log](#appendix-c--change-log) at the end of this handbook to see what changed in each version.
+
 ---
 
 ## Chapter 2 — Data Download
@@ -743,6 +762,31 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
   chmod +x download_data.sh
   ```
   `git checkout --` replaces your local file with the last committed version. Then `git pull` gets the fix. Then `chmod +x` because `git checkout --` resets permissions.
+
+**Problem:** `pip install -e .` fails with `ModuleOrPackageNotFoundError: No file/folder found for package wgbs-tools`
+- **Cause:** wgbstools is not a standard Python package — it has no `__init__.py` and its `pyproject.toml` has the `packages` line commented out. Poetry cannot find a package to install.
+- **Solution:** This is expected. wgbstools is installed via a symlink, not pip. Run:
+  ```bash
+  cd wgbs_tools && python3 setup.py && cd ..
+  ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
+  wgbstools --version
+  ```
+  The `wgbstools` executable is a symlink to `src/python/wgbs_tools.py`. When Python runs it, it resolves the symlink and adds `src/python/` to `sys.path`, which lets it find `find_markers.py` and other modules. The install script has been fixed to use this approach.
+
+**Problem:** `pipeline.py: error: unrecognized arguments: --discover-dmrs`
+- **Cause:** Your local code is out of date. The `--discover-dmrs` flag was added in v2.2.0. You need to `git pull` to get the latest code.
+- **Solution:**
+  ```bash
+  git pull
+  git log --oneline -1
+  ```
+  You should see a recent commit (not `6c47ed1` or earlier). If `git pull` says "already up to date" but `--discover-dmrs` is still not recognized, you may have a **nested directory** problem — the repo was cloned inside a folder with the same name. Check:
+  ```bash
+  pwd
+  git remote -v
+  grep -c "discover-dmrs" methyl_panel/pipeline.py
+  ```
+  If the `grep` returns `0`, you are in the wrong copy of the repo. Look for another `wbc-methylation-panel-v2/` directory (possibly inside the current one) that has the updated code. The correct directory is the one where `grep -c "discover-dmrs" methyl_panel/pipeline.py` returns a number greater than `0`.
 
 ### 7.2 Data Problems
 
