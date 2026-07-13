@@ -209,7 +209,7 @@ def find_wgbstools(wgbstools_path: Optional[str] = None) -> str:
         "wgbstools not found. Install it with: "
         "git clone https://github.com/nloyfer/wgbs_tools.git && "
         "cd wgbs_tools && python3 setup.py && cd .. && "
-        "pip install -e wgbs_tools"
+        "ln -sf \"$(pwd)/wgbs_tools/wgbstools\" .venv/bin/wgbstools"
     )
 
 

@@ -58,7 +58,7 @@ pip install scipy
 
 echo "✓ Python packages installed (including scipy for find_markers t-tests)"
 
-# Install wgbstools (from GitHub — not on PyPI)
+# Install wgbstools (from GitHub — not on PyPI, not pip-installable)
 echo ""
 echo "Installing wgbstools (from GitHub source)..."
 if [ ! -d "wgbs_tools" ]; then
@@ -68,22 +68,25 @@ fi
 # Step 1: Compile C++ tools (patter, segmentor, etc.)
 cd wgbs_tools
 python3 setup.py
-
-# Step 2: Install Python package into the virtualenv so that
-# 'wgbstools' is on PATH and all modules are importable.
-pip install -e .
-
 cd ..
+
+# Step 2: Make wgbstools available on PATH.
+# wgbstools is a symlink to src/python/wgbs_tools.py. When Python runs it,
+# it resolves the symlink and adds src/python/ to sys.path[0], which lets
+# it find find_markers.py and other modules via importlib.
+# pip install -e . does NOT work — pyproject.toml has the packages line
+# commented out and there is no __init__.py package directory.
+ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
 
 echo "✓ wgbstools installed"
 
 # Verify wgbstools is on PATH
 if ! command -v wgbstools &> /dev/null; then
-    echo "  wgbstools not on PATH, adding symlink..."
-    ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
+    echo "  WARNING: wgbstools not on PATH. Add .venv/bin to your PATH or run:"
+    echo "    ln -sf \"$(pwd)/wgbs_tools/wgbstools\" .venv/bin/wgbstools"
 fi
 
-echo "✓ wgbstools available: $(which wgbstools)"
+echo "✓ wgbstools available: $(which wgbstools 2>/dev/null || echo 'NOT FOUND')"
 
 # NOTE: init_genome is NOT needed for the pipeline.
 # find_markers works directly with the blocks file and beta files.

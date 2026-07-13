@@ -28,7 +28,7 @@ Key changes:
 
 1. **New Step 0 (DMR Discovery):** `--discover-dmrs` flag runs `wgbstools find_markers` on raw beta files to find DMRs from scratch. No external DMR file needed.
 2. **New module:** `phase0_dmr_discovery.py` — generates groups files, runs find_markers, extracts per-CpG methylation, computes cleanliness scores.
-3. **`install_macos.sh` fixed:** wgbstools now properly installed via `pip install -e .` (not just C++ compilation). Added scipy dependency. Removed unnecessary `init_genome` call.
+3. **`install_macos.sh` fixed:** wgbstools installed via symlink to `.venv/bin/wgbstools` (not `pip install -e .`, which fails because the package has no `__init__.py`). Added scipy dependency. Removed unnecessary `init_genome` call.
 4. **Cell type target mapping:** Each of the 7 cell types maps to specific atlas groups (e.g. CD3T = all T cell subtypes, BCELL = B + B-Memory).
 5. **Backward compatible:** Step 1 (load from Excel) still works for users who have a pre-computed DMR file.
 
@@ -754,9 +754,10 @@ Default: `primer3plus`. To use Roche DLC conditions, set `salt_preset = "roche_d
 - **Cause:** wgbstools not installed or not on PATH
 - **Solution:** Re-run `./install_macos.sh`. If that doesn't fix it, manually install:
   ```bash
-  cd wgbs_tools && python3 setup.py && pip install -e . && cd ..
+  cd wgbs_tools && python3 setup.py && cd ..
   ln -sf "$(pwd)/wgbs_tools/wgbstools" .venv/bin/wgbstools
   ```
+  Note: `pip install -e .` does NOT work for wgbstools — the package has no `__init__.py` and `pyproject.toml` has the packages line commented out. The symlink approach is the correct installation method.
 
 **Problem:** `wgbstools find_markers failed with return code 1`
 - **Cause:** Missing beta files, blocks file, or groups file. Or insufficient memory.
@@ -966,7 +967,7 @@ open results/MONO/primer_assays.pdf
 **New feature — DMR discovery from scratch:**
 - `phase0_dmr_discovery.py`: New module implementing Step 0. Generates per-cell-type groups files (target vs background), runs `wgbstools find_markers` on raw beta files, parses BED output, extracts per-CpG methylation from beta files, computes 5-component cleanliness scores, and saves `dmr_blocks.json` in the same format as Step 1.
 - `pipeline.py`: Added `step0_discover_dmrs()` and new CLI arguments (`--discover-dmrs`, `--beta-dir`, `--blocks-file`, `--groups-csv`, `--wgbstools-path`, `--threads`, `--top-markers`, `--max-bg-samples`, `--skip-find-markers`). When `--discover-dmrs` is set, Step 0 replaces Step 1.
-- `install_macos.sh`: Fixed wgbstools installation — now uses `pip install -e .` after C++ compilation (was only compiling C++ tools, not installing the Python package). Added `scipy` dependency. Removed unnecessary `init_genome` call. Added symlink fallback for PATH.
+- `install_macos.sh`: Fixed wgbstools installation — uses symlink to `.venv/bin/wgbstools` (not `pip install -e .`, which fails because the package has no `__init__.py`). Added `scipy` dependency. Removed unnecessary `init_genome` call.
 - Cell type target mapping: 7 immune cell types mapped to atlas groups (MONO→Blood-Monocytes, BCELL→Blood-B+Blood-B-Mem, NK→Blood-NK, GRAN→Blood-Granulocytes, CD3T→9 T cell subtypes, CD4T→4 CD4 subtypes, CD8T→4 CD8 subtypes).
 - Backward compatible: Step 1 (load from Excel) still works via `--dmr-xlsx`.
 
