@@ -86,11 +86,29 @@ def load_blocks(json_path: str) -> list:
         return json.load(f)
 
 
-def format_block_row(block: dict) -> dict:
-    """Extract block-level columns from a block dict."""
+def format_block_row(block: dict, subgroup_names: list = None) -> dict:
+    """Extract block-level columns from a block dict.
+
+    If subgroup_names is provided, also add per-subgroup methylation columns
+    and summary columns (min subgroup, worst subgroup).
+    """
     row = {}
     for display_name, key in BLOCK_COLUMNS:
         row[display_name] = block.get(key, "")
+
+    if subgroup_names is not None:
+        bg_sg = block.get("bg_subgroup_meth", {})
+        for sg in subgroup_names:
+            col_name = f"BG: {sg}"
+            row[col_name] = round(bg_sg.get(sg, ""), 4) if sg in bg_sg else ""
+        # Summary columns
+        if bg_sg:
+            row["Min subgroup methylation"] = round(min(bg_sg.values()), 4)
+            row["Worst background subgroup"] = min(bg_sg, key=bg_sg.get)
+        else:
+            row["Min subgroup methylation"] = ""
+            row["Worst background subgroup"] = ""
+
     return row
 
 
@@ -149,6 +167,15 @@ def export_excel(json_paths, top_n, output_path):
     # Remove default sheet
     wb.remove(wb.active)
 
+    # First pass: collect all unique background subgroup names across all files
+    all_subgroup_names = set()
+    for json_path in sorted(json_paths):
+        blocks = load_blocks(json_path)
+        for b in blocks:
+            bg_sg = b.get("bg_subgroup_meth", {})
+            all_subgroup_names.update(bg_sg.keys())
+    subgroup_names = sorted(all_subgroup_names)
+
     all_block_rows = []
     all_cpg_rows = []
 
@@ -165,9 +192,14 @@ def export_excel(json_paths, top_n, output_path):
         cell_type = top_blocks[0].get("cell_type_id", "Unknown")
         print(f"  {json_path}: {len(blocks)} blocks → top {len(top_blocks)} for {cell_type}")
 
-        # Per-cell-type sheet: block-level summary
-        block_rows = [format_block_row(b) for b in top_blocks]
+        # Per-cell-type sheet: block-level summary with per-subgroup columns
+        block_rows = [format_block_row(b, subgroup_names) for b in top_blocks]
         block_headers = [name for name, _ in BLOCK_COLUMNS]
+        # Add per-subgroup columns
+        for sg in subgroup_names:
+            block_headers.append(f"BG: {sg}")
+        block_headers.append("Min subgroup methylation")
+        block_headers.append("Worst background subgroup")
         ws = wb.create_sheet(title=cell_type[:31])  # Excel sheet name max 31 chars
         write_sheet(ws, block_headers, block_rows)
 
@@ -176,9 +208,13 @@ def export_excel(json_paths, top_n, output_path):
         for b in top_blocks:
             all_cpg_rows.extend(format_cpg_rows(b))
 
-    # Summary sheet: all blocks
+    # Summary sheet: all blocks (with per-subgroup columns)
     if all_block_rows:
         block_headers = [name for name, _ in BLOCK_COLUMNS]
+        for sg in subgroup_names:
+            block_headers.append(f"BG: {sg}")
+        block_headers.append("Min subgroup methylation")
+        block_headers.append("Worst background subgroup")
         ws_summary = wb.create_sheet(title="All blocks summary", index=0)
         write_sheet(ws_summary, block_headers, all_block_rows)
 

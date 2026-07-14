@@ -82,6 +82,7 @@ class DMRBlock:
     cleanliness_score: float
     target_celltype: str
     cpg_sites: List[CpGSite] = field(default_factory=list)
+    bg_subgroup_meth: Dict[str, float] = field(default_factory=dict)  # atlas group -> mean methylation
 
     @property
     def coordinates(self) -> str:

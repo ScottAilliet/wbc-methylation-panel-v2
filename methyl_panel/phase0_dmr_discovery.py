@@ -236,8 +236,10 @@ def run_find_markers(
     cell_type_id: str,
     threads: int = 2,
     top_n: int = 300,
-    delta_means: float = 0.3,
+    delta_means: float = 0.4,
     min_cpg: int = 3,
+    unmeth_mean_thresh: float = 0.15,
+    meth_mean_thresh: float = 0.65,
     wgbstools_path: Optional[str] = None,
 ) -> str:
     """
@@ -251,8 +253,10 @@ def run_find_markers(
         cell_type_id: Target group name in the groups file
         threads: Number of threads
         top_n: Number of top markers to keep
-        delta_means: Minimum methylation difference
+        delta_means: Minimum methylation difference (target vs background)
         min_cpg: Minimum CpGs per block
+        unmeth_mean_thresh: Target mean must be below this (default 0.15)
+        meth_mean_thresh: Background mean must be above this (default 0.65)
         wgbstools_path: Path to wgbstools executable
 
     Returns:
@@ -293,6 +297,8 @@ def run_find_markers(
         '--only_hypo',
         '--delta_means', str(delta_means),
         '--min_cpg', str(min_cpg),
+        '--unmeth_mean_thresh', str(unmeth_mean_thresh),
+        '--meth_mean_thresh', str(meth_mean_thresh),
         '--sort_by', 'delta_means',
         '--top', str(top_n),
         '--header',
@@ -519,6 +525,62 @@ def _match_beta_files(
     return target_betas, bg_betas
 
 
+def _match_beta_files_with_groups(
+    groups_csv: str,
+    atlas_groups_csv: str,
+    beta_dir: str,
+) -> Tuple[List[str], List[str], Dict[str, str]]:
+    """
+    Match target and background samples to beta files, and also return
+    a mapping from background beta file path -> original atlas group name.
+
+    This is needed for per-subgroup background checking: we need to know
+    which background samples belong to which blood cell type (e.g. CD8 T
+    cells, B cells) to verify that EACH subgroup is sufficiently methylated.
+
+    Args:
+        groups_csv: Path to the generated groups CSV (target/background)
+        atlas_groups_csv: Path to data/full_atlas_groups.csv (original groups)
+        beta_dir: Directory containing .beta files
+
+    Returns:
+        (target_betas, background_betas, bg_group_map)
+        where bg_group_map maps beta_path -> atlas group name (e.g. "Blood-T-CD8")
+    """
+    df = pd.read_csv(groups_csv)
+    name_col = df.columns[0]
+
+    # Load original atlas groups to get the real group name for each sample
+    atlas_df = pd.read_csv(atlas_groups_csv)
+    atlas_name_col = atlas_df.columns[0]
+    sample_to_group = dict(zip(atlas_df[atlas_name_col], atlas_df['group']))
+
+    all_betas = glob.glob(os.path.join(beta_dir, "*.beta"))
+    beta_lookup = {}
+    for bp in all_betas:
+        basename = os.path.basename(bp)
+        stem = basename[:-5] if basename.endswith('.beta') else basename
+        beta_lookup[stem] = bp
+
+    target_names = df[df['group'] != 'background'][name_col].tolist()
+    bg_names = df[df['group'] == 'background'][name_col].tolist()
+
+    target_betas = []
+    for name in target_names:
+        if name in beta_lookup:
+            target_betas.append(beta_lookup[name])
+
+    bg_betas = []
+    bg_group_map = {}
+    for name in bg_names:
+        if name in beta_lookup:
+            bp = beta_lookup[name]
+            bg_betas.append(bp)
+            bg_group_map[bp] = sample_to_group.get(name, "unknown")
+
+    return target_betas, bg_betas, bg_group_map
+
+
 def extract_percpg_methylation(
     blocks: List[DMRBlock],
     target_betas: List[str],
@@ -592,12 +654,17 @@ def extract_percpg_methylation_with_indices(
     background_betas: List[str],
     min_cov: int = 5,
     max_bg_samples: int = 30,
+    bg_group_map: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     Extract per-CpG methylation using CpG indices from find_markers.
 
     This is the full version that reads beta files at the correct CpG
     indices and computes proper cleanliness scores.
+
+    If bg_group_map is provided, also computes per-subgroup background
+    methylation (e.g. CD8 T cells vs B cells vs monocytes) and stores
+    it in block.bg_subgroup_meth.
 
     Args:
         blocks: List of DMRBlock objects (modified in place)
@@ -606,6 +673,7 @@ def extract_percpg_methylation_with_indices(
         background_betas: List of background beta file paths
         min_cov: Minimum coverage per CpG site
         max_bg_samples: Maximum background samples to use (for speed)
+        bg_group_map: Maps beta_path -> atlas group name (e.g. "Blood-T-CD8")
     """
     bg_betas = background_betas[:max_bg_samples]
     print(f"  Per-CpG extraction: {len(target_betas)} target, "
@@ -633,6 +701,22 @@ def extract_percpg_methylation_with_indices(
 
         # Compute cleanliness score
         score = _cleanliness_score(tg_mat, bg_mat)
+
+        # Per-subgroup background methylation
+        if bg_group_map:
+            subgroup_meth = {}
+            for idx, bp in enumerate(bg_betas):
+                group = bg_group_map.get(bp, "unknown")
+                if group not in subgroup_meth:
+                    subgroup_meth[group] = []
+                # Block-level mean for this sample
+                sample_mean = np.nanmean(bg_mat[idx])
+                if not np.isnan(sample_mean):
+                    subgroup_meth[group].append(float(sample_mean))
+            # Average per subgroup
+            block.bg_subgroup_meth = {
+                g: float(np.mean(vals)) for g, vals in subgroup_meth.items() if vals
+            }
 
         # Build CpG sites
         # Genomic positions: distribute evenly across the block
@@ -809,6 +893,7 @@ def save_blocks_json(blocks: List[DMRBlock], output_path: str) -> None:
             "target_mean_meth": b.target_mean_meth,
             "background_mean_meth": b.background_mean_meth,
             "delta_means": b.delta_means,
+            "bg_subgroup_meth": b.bg_subgroup_meth if b.bg_subgroup_meth else {},
             "cpg_sites": [
                 {"label": c.label, "position": c.position,
                  "global_idx": c.global_idx,
@@ -834,11 +919,14 @@ def discover_dmrs(
     out_dir: str,
     threads: int = 2,
     top_n: int = 300,
-    delta_means: float = 0.3,
+    delta_means: float = 0.4,
     min_cpg: int = 3,
     wgbstools_path: Optional[str] = None,
     max_bg_samples: int = 30,
     skip_find_markers: bool = False,
+    unmeth_mean_thresh: float = 0.15,
+    meth_mean_thresh: float = 0.65,
+    min_bg_subgroup_meth: float = 0.70,
 ) -> List[DMRBlock]:
     """
     Full DMR discovery pipeline for one cell type.
@@ -851,11 +939,15 @@ def discover_dmrs(
         out_dir: Output directory
         threads: Threads for find_markers
         top_n: Top N markers to keep
-        delta_means: Min methylation difference
+        delta_means: Min methylation difference (default 0.4)
         min_cpg: Min CpGs per block
         wgbstools_path: Path to wgbstools executable
         max_bg_samples: Max background samples for per-CpG extraction
         skip_find_markers: If True, skip find_markers (use existing BED)
+        unmeth_mean_thresh: Target mean must be below this (default 0.15)
+        meth_mean_thresh: Background mean must be above this (default 0.65)
+        min_bg_subgroup_meth: Reject blocks where any background subgroup
+            has mean methylation below this (default 0.70)
 
     Returns:
         List of DMRBlock objects with per-CpG data
@@ -895,6 +987,8 @@ def discover_dmrs(
             top_n=top_n,
             delta_means=delta_means,
             min_cpg=min_cpg,
+            unmeth_mean_thresh=unmeth_mean_thresh,
+            meth_mean_thresh=meth_mean_thresh,
             wgbstools_path=wgbstools_path,
         )
 
@@ -909,15 +1003,51 @@ def discover_dmrs(
 
     # Step 0e: Extract per-CpG methylation
     print(f"  Step 0e: Extracting per-CpG methylation from beta files")
-    target_betas, bg_betas = _match_beta_files(groups_file, beta_dir)
+    target_betas, bg_betas, bg_group_map = _match_beta_files_with_groups(
+        groups_file, groups_csv, beta_dir
+    )
     extract_percpg_methylation_with_indices(
         blocks, cpg_indices, target_betas, bg_betas,
         max_bg_samples=max_bg_samples,
+        bg_group_map=bg_group_map,
     )
 
     # Report cleanliness scores
     good = sum(1 for b in blocks if b.cleanliness_score >= 0.6)
     print(f"    Cleanliness: {good}/{len(blocks)} blocks score >= 0.6")
+
+    # Step 0e2: Per-subgroup background filter
+    # Reject blocks where any background subgroup (e.g. CD8 T cells)
+    # has mean methylation below the threshold. This catches regions
+    # where the average background looks fine but one specific cell type
+    # is partially unmethylated — which would cause false positives in
+    # a real blood sample containing that cell type.
+    if bg_group_map and min_bg_subgroup_meth > 0:
+        before = len(blocks)
+        filtered = []
+        rejected_blocks = []
+        for b in blocks:
+            if not b.bg_subgroup_meth:
+                filtered.append(b)
+                continue
+            min_subgroup = min(b.bg_subgroup_meth.values())
+            if min_subgroup >= min_bg_subgroup_meth:
+                filtered.append(b)
+            else:
+                rejected_blocks.append(b)
+        rejected = len(rejected_blocks)
+        if rejected > 0:
+            print(f"  Step 0e2: Per-subgroup filter (min >= {min_bg_subgroup_meth}): "
+                  f"rejected {rejected}/{before} blocks")
+            # Show which subgroups caused rejections
+            rejected_subgroups = {}
+            for b in rejected_blocks:
+                worst = min(b.bg_subgroup_meth, key=b.bg_subgroup_meth.get)
+                rejected_subgroups[worst] = rejected_subgroups.get(worst, 0) + 1
+            for sg, count in sorted(rejected_subgroups.items(), key=lambda x: -x[1]):
+                print(f"    {sg}: {count} blocks rejected (partially unmethylated)")
+        blocks[:] = filtered
+        print(f"    {len(blocks)} blocks remain after per-subgroup filter")
 
     # Step 0f: Save as JSON
     json_path = os.path.join(out_dir, 'dmr_blocks.json')
@@ -948,6 +1078,14 @@ def main():
                         help='Output directory')
     parser.add_argument('--threads', type=int, default=2)
     parser.add_argument('--top', type=int, default=300)
+    parser.add_argument('--delta-means', type=float, default=0.4,
+                        help='Min methylation difference (default 0.4)')
+    parser.add_argument('--unmeth-mean-thresh', type=float, default=0.15,
+                        help='Target mean must be below this (default 0.15)')
+    parser.add_argument('--meth-mean-thresh', type=float, default=0.65,
+                        help='Background mean must be above this (default 0.65)')
+    parser.add_argument('--min-bg-subgroup-meth', type=float, default=0.70,
+                        help='Reject blocks where any bg subgroup is below this (default 0.70)')
     parser.add_argument('--max-bg-samples', type=int, default=30)
     parser.add_argument('--skip-find-markers', action='store_true',
                         help='Skip find_markers (use existing BED)')
@@ -961,6 +1099,10 @@ def main():
         out_dir=args.output_dir,
         threads=args.threads,
         top_n=args.top,
+        delta_means=args.delta_means,
+        unmeth_mean_thresh=args.unmeth_mean_thresh,
+        meth_mean_thresh=args.meth_mean_thresh,
+        min_bg_subgroup_meth=args.min_bg_subgroup_meth,
         max_bg_samples=args.max_bg_samples,
         skip_find_markers=args.skip_find_markers,
     )

@@ -1,8 +1,8 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.2
+**Version:** Pipeline v2.2.3
 **Repository:** `wbc-methylation-panel-v2`
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-14
 
 ---
 
@@ -11,6 +11,24 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
+
+### What Changed in v2.2.3
+
+This version improves DMR marker quality by tightening the find_markers filters and adding a **per-subgroup background check**. It also explains why blood-only background gives lower delta values than full-atlas background.
+
+Key changes:
+
+1. **Tighter find_markers filters:** Previously, find_markers used weak default filters — only `delta_means >= 0.3` was enforced, with no requirement that the target be near-zero or the background be near-one. Now three filters are applied:
+   - `--delta_means 0.4` (was 0.3) — stricter methylation difference
+   - `--unmeth_mean_thresh 0.15` (was disabled) — target mean must be below 15%
+   - `--meth_mean_thresh 0.65` (was disabled) — background mean must be above 65%
+   This rejects mediocre markers at the find_markers stage so the top-300 list contains only markers with clear target≈0 / background>>0.
+
+2. **Per-subgroup background check:** After find_markers, the pipeline now computes mean methylation for **each background blood cell type independently** (e.g. B cells, NK cells, CD8 T cells, monocytes, granulocytes). Any DMR block where a single background subgroup has mean methylation below 0.70 is rejected. This catches the key problem with CD4T/CD8T: a region where CD4T is unmethylated (0.01) and the average background looks fine (0.88) but CD8 T cells are only partially methylated (0.55) — which would cause false positives in a real blood sample containing CD8 cells. The threshold can be adjusted with `--min-bg-subgroup-meth`.
+
+3. **Excel export updated:** `export_dmr_excel.py` now includes per-subgroup methylation columns (one per blood cell type), a "Min subgroup methylation" column, and a "Worst background subgroup" column, so you can see exactly which cell types are well-separated and which are borderline.
+
+4. **Why blood-only background gives lower deltas:** Switching from the full 207-sample atlas to blood-only background (36 samples) naturally reduces delta values for all cell types. MONO vs liver/brain is a large epigenetic distance (delta ~0.95); MONO vs T cells/B cells is smaller (delta ~0.88). CD4T vs CD8T is the smallest — they are closely related T-cell lineages. **This is expected and correct for a WBC assay**: the deltas that matter are the ones against cells that will actually be in the same tube, not against liver tissue.
 
 ### What Changed in v2.2.2
 
@@ -411,16 +429,23 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 - `--groups-csv`: Path to full atlas groups CSV (default: `data/full_atlas_groups.csv`)
 - `--threads`: Number of threads for find_markers (default: 2)
 - `--top-markers`: Number of top markers per cell type (default: 300)
+- `--delta-means`: Min methylation difference between target and background (default: 0.4)
+- `--unmeth-mean-thresh`: Target mean methylation must be below this (default: 0.15)
+- `--meth-mean-thresh`: Background mean methylation must be above this (default: 0.65)
+- `--min-bg-subgroup-meth`: Reject blocks where any background blood cell type subgroup has mean methylation below this (default: 0.70). Set to 0 to disable.
 - `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
 
 **What Step 0 does:**
 1. Generates a groups CSV file — target samples (your cell type) vs background (other blood cell types only)
 2. Generates a beta list file — paths to all .beta files
-3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs (delta_means ≥ 0.3, min 3 CpGs, top 300)
+3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs with three quality filters: delta_means ≥ 0.4, target mean < 0.15, background mean > 0.65, min 3 CpGs, top 300
 4. Parses the output BED file
 5. Extracts per-CpG methylation from beta files for each DMR
 6. Computes cleanliness scores (target near-zero, background near-one, consistency, coverage)
-7. Saves `dmr_blocks.json` — same format as Step 1, so steps 2–9 work unchanged
+7. Computes per-subgroup background methylation — verifies that EACH background blood cell type (B, NK, granulocytes, monocytes, CD8 T cells, etc.) is sufficiently methylated (> 0.70). Rejects blocks where any single subgroup is partially unmethylated, even if the average background looks fine.
+8. Saves `dmr_blocks.json` — same format as Step 1, so steps 2–9 work unchanged
+
+**Why delta values are lower with blood-only background:** The background is restricted to other blood cell types (36 samples), not the full 207-sample atlas. Blood cells are more epigenetically similar to each other than to non-blood tissues. MONO vs T cells gives delta ~0.88, while MONO vs liver gives delta ~0.95. CD4T vs CD8T gives delta ~0.85 because CD4 and CD8 T cells are closely related lineages. **This is correct for a WBC assay** — the deltas that matter are against cells that will be in the same tube. The per-subgroup filter ensures that even the most similar background cell type is sufficiently methylated.
 
 **Runtime:** ~5 minutes per cell type with 2 threads on a Mac (find_markers ~1 min, per-CpG extraction ~4 min).
 
@@ -615,9 +640,15 @@ python export_dmr_excel.py results/MONO/dmr_blocks.json --top 200 -o dmr_MONO.xl
 | Gene | Associated gene name |
 | Annotation | Genomic annotation (e.g. promoter-TSS, intron, intergenic) |
 | Target mean methylation | Mean methylation across target samples (should be near 0 for hypo-DMRs) |
-| Background mean methylation | Mean methylation across background blood samples (should be near 1) |
+| Background mean methylation | Mean methylation across all background blood samples (should be near 1) |
 | Delta means | Difference between background and target methylation |
 | Cleanliness score | 5-component score (0–1, higher = better primer candidate) |
+| BG: Blood-B | Mean methylation of B cell background subgroup |
+| BG: Blood-NK | Mean methylation of NK cell background subgroup |
+| BG: Blood-T-CD8 | Mean methylation of CD8 T cell background subgroup |
+| ... | One column per background blood cell type subgroup |
+| Min subgroup methylation | Lowest methylation across all background subgroups (should be > 0.70) |
+| Worst background subgroup | The blood cell type with the lowest methylation (most likely to cause false positives) |
 
 **Per-CpG columns** (in the Per-CpG detail sheet):
 
@@ -1003,7 +1034,7 @@ wbc-methylation-panel-v2/
 │   ├── immune_groups.csv            # Immune cell type groups (7 types)
 │   └── download_list_nonimmune.csv  # Non-immune sample download list
 ├── docs/
-│   ├── handbook.md                  # This document (v2.2.1)
+│   ├── handbook.md                  # This document (v2.2.3)
 │   ├── handbook_v2.2.md             # Previous handbook version (preserved)
 │   ├── handbook_v2.1.md             # Previous handbook version (preserved)
 │   ├── handbook_v1.md               # Original handbook version (preserved)
@@ -1101,6 +1132,13 @@ open results/MONO/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.2.3 (2026-07-14)
+
+- `phase0_dmr_discovery.py`, `pipeline.py`: Tightened find_markers filters. `--delta-means` default changed from 0.3 to 0.4. Added `--unmeth-mean-thresh` (default 0.15) and `--meth-mean-thresh` (default 0.65) — these were previously disabled (find_markers defaults of 1.0 and 0.0), allowing mediocre markers with target=0.3/bg=0.6 to pass. Now only markers with target < 15% and background > 65% are kept.
+- `phase0_dmr_discovery.py`: Added per-subgroup background check. After per-CpG extraction, the pipeline computes mean methylation for each background blood cell type subgroup independently (e.g. Blood-T-CD8, Blood-B, Blood-NK). Blocks where any subgroup has mean methylation below `--min-bg-subgroup-meth` (default 0.70) are rejected. This catches the key problem with CD4T/CD8T: a region where the average background looks fine (0.88) but CD8 T cells are partially unmethylated (0.55) — which would cause false positives in real blood. Added `_match_beta_files_with_groups()` to map background beta files to their original atlas group names. Added `bg_subgroup_meth` field to DMRBlock and JSON output.
+- `phase1_dmr_loader.py`: Added `bg_subgroup_meth: Dict[str, float]` field to DMRBlock dataclass.
+- `export_dmr_excel.py`: Added per-subgroup methylation columns (one per blood cell type, e.g. "BG: Blood-T-CD8"), "Min subgroup methylation", and "Worst background subgroup" columns to block-level sheets. First pass collects all unique subgroup names across all input files to build consistent columns.
 
 ### v2.2.2 (2026-07-13)
 

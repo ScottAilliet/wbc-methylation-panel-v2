@@ -58,6 +58,10 @@ def step0_discover_dmrs(args):
         out_dir=args.output_dir,
         threads=args.threads,
         top_n=args.top_markers,
+        delta_means=args.delta_means,
+        unmeth_mean_thresh=args.unmeth_mean_thresh,
+        meth_mean_thresh=args.meth_mean_thresh,
+        min_bg_subgroup_meth=args.min_bg_subgroup_meth,
         wgbstools_path=args.wgbstools_path,
         max_bg_samples=args.max_bg_samples,
         skip_find_markers=args.skip_find_markers,
@@ -523,6 +527,14 @@ def main():
                         help="Number of threads for find_markers")
     parser.add_argument("--top-markers", type=int, default=300,
                         help="Number of top markers per cell type")
+    parser.add_argument("--delta-means", type=float, default=0.4,
+                        help="Min methylation difference for find_markers (default 0.4)")
+    parser.add_argument("--unmeth-mean-thresh", type=float, default=0.15,
+                        help="Target mean must be below this (default 0.15)")
+    parser.add_argument("--meth-mean-thresh", type=float, default=0.65,
+                        help="Background mean must be above this (default 0.65)")
+    parser.add_argument("--min-bg-subgroup-meth", type=float, default=0.70,
+                        help="Reject blocks where any bg subgroup is below this (default 0.70)")
     parser.add_argument("--max-bg-samples", type=int, default=30,
                         help="Max background samples for per-CpG extraction")
     parser.add_argument("--skip-find-markers", action="store_true",
