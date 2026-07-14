@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.5
+**Version:** Pipeline v2.2.6
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-14
 
@@ -11,6 +11,16 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
+
+### What Changed in v2.2.6
+
+This version corrects the DMR discovery strategy and widens the candidate pool.
+
+Key changes:
+
+1. **Top 1000 markers (was 300):** `--top-markers` default changed from 300 to 1000 in `pipeline.py`, `phase0_dmr_discovery.py`, and `config.py`. find_markers now returns the top 1000 DMRs per cell type, giving the strict 0.70 per-subgroup filter 3x more candidates to work with. With 300 candidates, the filter left only 9 markers for MONO and 6 for NK — too few for a panel. With 1000, more correctly-ranked candidates enter the filter.
+
+2. **Hybrid atlas approach deprecated for hypo markers.** The `--use-full-atlas` flag (added in v2.2.5) is no longer recommended for hypomethylated marker discovery. Testing showed it finds more raw candidates (11,214 for MONO vs 3,804 for NK) but the **ranking** is wrong for blood separation: find_markers sorts by delta against the average of all 204 atlas background samples (liver, brain, colon, granulocytes mixed together). The top 300 by atlas delta are the regions most different from non-blood tissues — NOT the regions most different from blood cells. A region where MONO=0.01, granulocytes=0.55, liver=0.95 gets a huge atlas delta (0.84) and ranks high, but granulocytes at 0.55 fails the 0.70 blood filter. Blood-only find_markers ranks by blood delta instead — the correct metric for what we're filtering on. The `--use-full-atlas` flag remains available for experimentation but is not in the recommended commands. Hypermethylated markers (`--only-hyper`) remain valuable — they search a completely different set of regions.
 
 ### What Changed in v2.2.5
 
@@ -450,21 +460,21 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 - `--blocks-file`: Path to blocks BED file (default: `data/GSE186458_blocks.s205.bed.gz`)
 - `--groups-csv`: Path to full atlas groups CSV (default: `data/full_atlas_groups.csv`)
 - `--threads`: Number of threads for find_markers (default: 2)
-- `--top-markers`: Number of top markers per cell type (default: 300)
+- `--top-markers`: Number of top markers per cell type (default: 1000)
 - `--delta-means`: Min methylation difference between target and background (default: 0.3)
 - `--unmeth-mean-thresh`: Target mean methylation must be below this (default: 0.15)
 - `--meth-mean-thresh`: Background mean methylation must be above this (default: 0.65)
 - `--min-bg-subgroup-meth`: Reject blocks where any background blood cell type subgroup has mean methylation below this (default: 0.70). Set to 0 to disable. For hypo markers, every background subgroup must be ≥ this value. For hyper markers (`--only-hyper`), every background subgroup must be ≤ (1 - this value).
 - `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
-- `--use-full-atlas`: Use the full 207-sample atlas as find_markers background instead of blood-only (36 samples). Per-CpG extraction and per-subgroup filter still use blood-only background. Finds more candidate DMRs, especially for CD4T/CD8T.
+- `--use-full-atlas`: Use the full 207-sample atlas as find_markers background instead of blood-only (36 samples). Per-CpG extraction and per-subgroup filter still use blood-only background. **Not recommended for hypo markers** — atlas delta ranking selects regions most different from non-blood tissues, not from blood cells. Blood-only ranking is correct for blood separation. Remains available for experimentation.
 - `--only-hyper`: Discover hypermethylated markers (target methylated, background unmethylated) instead of the default hypomethylated markers (target unmethylated, background methylated). The per-subgroup filter and cleanliness score are automatically inverted.
 
 **What Step 0 does:**
-1. Generates two groups CSV files — a blood-only groups file (for per-CpG extraction and per-subgroup filter) and, if `--use-full-atlas` is set, a full-atlas groups file (for find_markers). If `--use-full-atlas` is not set, both are blood-only. Overlapping cell populations (e.g. T-CD3 for CD4T/CD8T) are excluded from the background in both files.
+1. Generates a groups CSV file — target samples (your cell type) vs background (other blood cell types only, 36 blood samples). Overlapping cell populations (e.g. T-CD3 for CD4T/CD8T) are excluded from the background.
 2. Generates a beta list file — paths to all .beta files
-3. Runs `wgbstools find_markers` — discovers DMRs with quality filters: delta_means ≥ 0.3, target mean < 0.15 (hypo) or > 0.65 (hyper), background mean > 0.65 (hypo) or < 0.15 (hyper), min 3 CpGs, top 300. Uses `--only_hypo` (default) or `--only_hyper` (with `--only-hyper`).
+3. Runs `wgbstools find_markers` — discovers DMRs with quality filters: delta_means ≥ 0.3, target mean < 0.15 (hypo) or > 0.65 (hyper), background mean > 0.65 (hypo) or < 0.15 (hyper), min 3 CpGs, top 1000. Uses `--only_hypo` (default) or `--only_hyper` (with `--only-hyper`). Ranks by blood delta — the correct metric for blood cell separation.
 4. Parses the output BED file
-5. Extracts per-CpG methylation from beta files for each DMR (always using blood-only background)
+5. Extracts per-CpG methylation from beta files for each DMR (blood-only background)
 6. Computes cleanliness scores — for hypo markers: target near-zero, background near-one; for hyper markers: target near-one, background near-zero. Both include consistency and coverage components.
 7. Computes per-subgroup background methylation — for hypo markers, verifies that EACH background blood cell type is sufficiently methylated (≥ 0.70); for hyper markers, verifies each is sufficiently unmethylated (≤ 0.30). Rejects blocks where any single subgroup fails.
 8. Saves `dmr_blocks.json` — same format as Step 1, with a `direction` field (`"U"` for hypo, `"M"` for hyper), so steps 2–9 work unchanged
@@ -554,13 +564,12 @@ When using `--discover-dmrs`, the pipeline automatically merges these atlas grou
 To run all 7 immune cell types with DMR discovery:
 
 ```bash
-# Hypomethylated markers with hybrid atlas approach (recommended)
+# Hypomethylated markers (blood-only background, strict 0.70 filter)
 for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
     python -m methyl_panel.pipeline --steps all --discover-dmrs \
         --cell-type $CT \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
-        --use-full-atlas \
         --output-dir results/$CT/
 done
 ```
@@ -572,7 +581,7 @@ for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
         --cell-type $CT \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
-        --use-full-atlas --only-hyper \
+        --only-hyper \
         --output-dir results_hyper/$CT/
 done
 ```
@@ -1152,13 +1161,12 @@ python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
 ```
 
 ```bash
-# All 7 immune cell types — hypomethylated markers with hybrid atlas approach
+# All 7 immune cell types — hypomethylated markers (blood-only, strict 0.70 filter)
 for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
     python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
         --discover-dmrs --cell-type $CT \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
-        --use-full-atlas \
         --output-dir results/$CT/
 done
 ```
@@ -1170,7 +1178,7 @@ for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
         --discover-dmrs --cell-type $CT \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
-        --use-full-atlas --only-hyper \
+        --only-hyper \
         --output-dir results_hyper/$CT/
 done
 ```
@@ -1183,6 +1191,11 @@ open results/MONO/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.2.6 (2026-07-14)
+
+- `pipeline.py`, `phase0_dmr_discovery.py`, `config.py`: Default `--top-markers` changed from 300 to 1000. With 300 candidates and the strict 0.70 per-subgroup filter, only 9 MONO and 6 NK markers survived — too few for a panel. With 1000, the filter has 3x more correctly-ranked candidates to work with.
+- Deprecated `--use-full-atlas` for hypomethylated markers. Testing showed the full atlas background finds more raw candidates but ranks them by atlas delta (difference from liver/brain/colon), not blood delta. The top 300 by atlas delta are the regions most different from non-blood tissues — the worst candidates for blood subgroup separation. Blood-only find_markers ranks by blood delta, which is the correct metric for what the per-subgroup filter checks. The flag remains available but is not in recommended commands. Hypermethylated markers (`--only-hyper`) remain recommended — they search a different set of regions.
 
 ### v2.2.5 (2026-07-14)
 

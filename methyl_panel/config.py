@@ -950,7 +950,7 @@ class PipelineConfig:
     min_cpg: int = 5              # hard minimum CpGs per DMR block
     preferred_min_cpg: int = 7    # preferred minimum; blocks with >=7 are flagged as preferred
     only_hypo: bool = True
-    top_n_markers: int = 300
+    top_n_markers: int = 1000
     sort_by: str = "delta_means"
     threads: int = 8
     max_primers_per_block: int = 10  # cap primer pairs returned per block per template

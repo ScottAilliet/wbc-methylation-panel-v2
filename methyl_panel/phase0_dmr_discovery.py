@@ -331,7 +331,7 @@ def run_find_markers(
     out_dir: str,
     cell_type_id: str,
     threads: int = 2,
-    top_n: int = 300,
+    top_n: int = 1000,
     delta_means: float = 0.3,
     min_cpg: int = 3,
     unmeth_mean_thresh: float = 0.15,
@@ -1153,7 +1153,7 @@ def discover_dmrs(
     groups_csv: str,
     out_dir: str,
     threads: int = 2,
-    top_n: int = 300,
+    top_n: int = 1000,
     delta_means: float = 0.3,
     min_cpg: int = 3,
     wgbstools_path: Optional[str] = None,
@@ -1358,7 +1358,7 @@ def main():
     parser.add_argument('--output-dir', default='dmr_output/',
                         help='Output directory')
     parser.add_argument('--threads', type=int, default=2)
-    parser.add_argument('--top', type=int, default=300)
+    parser.add_argument('--top', type=int, default=1000)
     parser.add_argument('--delta-means', type=float, default=0.3,
                         help='Min methylation difference (default 0.3)')
     parser.add_argument('--unmeth-mean-thresh', type=float, default=0.15,
