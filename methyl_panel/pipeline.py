@@ -533,8 +533,8 @@ def main():
                         help="Target mean must be below this (default 0.15)")
     parser.add_argument("--meth-mean-thresh", type=float, default=0.65,
                         help="Background mean must be above this (default 0.65)")
-    parser.add_argument("--min-bg-subgroup-meth", type=float, default=0.70,
-                        help="Reject blocks where any bg subgroup is below this (default 0.70)")
+    parser.add_argument("--min-bg-subgroup-meth", type=float, default=0.50,
+                        help="Reject blocks where any bg subgroup is below this (default 0.50)")
     parser.add_argument("--max-bg-samples", type=int, default=30,
                         help="Max background samples for per-CpG extraction")
     parser.add_argument("--skip-find-markers", action="store_true",

@@ -952,7 +952,7 @@ def discover_dmrs(
     skip_find_markers: bool = False,
     unmeth_mean_thresh: float = 0.15,
     meth_mean_thresh: float = 0.65,
-    min_bg_subgroup_meth: float = 0.70,
+    min_bg_subgroup_meth: float = 0.50,
 ) -> List[DMRBlock]:
     """
     Full DMR discovery pipeline for one cell type.
@@ -1110,8 +1110,8 @@ def main():
                         help='Target mean must be below this (default 0.15)')
     parser.add_argument('--meth-mean-thresh', type=float, default=0.65,
                         help='Background mean must be above this (default 0.65)')
-    parser.add_argument('--min-bg-subgroup-meth', type=float, default=0.70,
-                        help='Reject blocks where any bg subgroup is below this (default 0.70)')
+    parser.add_argument('--min-bg-subgroup-meth', type=float, default=0.50,
+                        help='Reject blocks where any bg subgroup is below this (default 0.50)')
     parser.add_argument('--max-bg-samples', type=int, default=30)
     parser.add_argument('--skip-find-markers', action='store_true',
                         help='Skip find_markers (use existing BED)')

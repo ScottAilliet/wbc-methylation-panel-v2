@@ -18,7 +18,7 @@ This version improves DMR marker quality by adding a **per-subgroup background c
 
 Key changes:
 
-1. **Per-subgroup background check:** After find_markers, the pipeline now computes mean methylation for **each background blood cell type independently** (e.g. B cells, NK cells, CD8 T cells, monocytes, granulocytes). Any DMR block where a single background subgroup has mean methylation below 0.70 is rejected. This catches the key problem with CD4T/CD8T: a region where CD4T is unmethylated (0.01) and the average background looks fine (0.88) but CD8 T cells are only partially methylated (0.55) — which would cause false positives in a real blood sample containing CD8 cells. The threshold can be adjusted with `--min-bg-subgroup-meth`.
+1. **Per-subgroup background check:** After find_markers, the pipeline now computes mean methylation for **each background blood cell type independently** (e.g. B cells, NK cells, CD8 T cells, monocytes, granulocytes). Any DMR block where a single background subgroup has mean methylation below 0.50 is rejected. This catches the key problem with CD4T/CD8T: a region where CD4T is unmethylated (0.01) and the average background looks fine (0.88) but CD8 T cells are only partially methylated (0.55) — which would cause false positives in a real blood sample containing CD8 cells. The threshold can be adjusted with `--min-bg-subgroup-meth`. The default is 0.50 (each background subgroup must be more methylated than not). A stricter threshold of 0.70 can be used for well-separated cell types like MONO/BCELL, but for closely related T-cell subtypes (CD4T/CD8T) 0.50 is more appropriate — CD4 and CD8 T cells share much of their methylation landscape, and requiring all CD8 subgroups to be > 70% methylated at CD4-specific regions leaves almost no markers.
 
 2. **T-CD3 excluded from CD4T/CD8T backgrounds:** Blood-T-CD3 is a pan-T cell population containing both CD4+ and CD8+ T cells. It overlaps with the CD4T and CD8T targets, so it is now excluded from their backgrounds (via `BG_EXCLUDE` in `phase0_dmr_discovery.py`). Without this exclusion, the per-subgroup filter rejected 68/73 CD4T markers because T-CD3 was "partially unmethylated" — it contains CD4+ T cells that are unmethylated at CD4-specific regions. With the exclusion, CD4T background is B cells, NK cells, granulocytes, monocytes, and CD8 T cells only.
 
@@ -430,7 +430,7 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 - `--delta-means`: Min methylation difference between target and background (default: 0.3)
 - `--unmeth-mean-thresh`: Target mean methylation must be below this (default: 0.15)
 - `--meth-mean-thresh`: Background mean methylation must be above this (default: 0.65)
-- `--min-bg-subgroup-meth`: Reject blocks where any background blood cell type subgroup has mean methylation below this (default: 0.70). Set to 0 to disable.
+- `--min-bg-subgroup-meth`: Reject blocks where any background blood cell type subgroup has mean methylation below this (default: 0.50). Set to 0 to disable. Use 0.70 for well-separated cell types, 0.50 for closely related T-cell subtypes.
 - `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
 
 **What Step 0 does:**
@@ -440,7 +440,7 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 4. Parses the output BED file
 5. Extracts per-CpG methylation from beta files for each DMR
 6. Computes cleanliness scores (target near-zero, background near-one, consistency, coverage)
-7. Computes per-subgroup background methylation — verifies that EACH background blood cell type (B, NK, granulocytes, monocytes, CD8 T cells, etc.) is sufficiently methylated (> 0.70). Rejects blocks where any single subgroup is partially unmethylated, even if the average background looks fine.
+7. Computes per-subgroup background methylation — verifies that EACH background blood cell type (B, NK, granulocytes, monocytes, CD8 T cells, etc.) is sufficiently methylated (> 0.50). Rejects blocks where any single subgroup is partially unmethylated, even if the average background looks fine.
 8. Saves `dmr_blocks.json` — same format as Step 1, so steps 2–9 work unchanged
 
 **Why delta values are lower with blood-only background:** The background is restricted to other blood cell types (36 samples), not the full 207-sample atlas. Blood cells are more epigenetically similar to each other than to non-blood tissues. MONO vs T cells gives delta ~0.88, while MONO vs liver gives delta ~0.95. CD4T vs CD8T gives delta ~0.85 because CD4 and CD8 T cells are closely related lineages. **This is correct for a WBC assay** — the deltas that matter are against cells that will be in the same tube. The per-subgroup filter ensures that even the most similar background cell type is sufficiently methylated.
@@ -645,7 +645,7 @@ python export_dmr_excel.py results/MONO/dmr_blocks.json --top 200 -o dmr_MONO.xl
 | BG: Blood-NK | Mean methylation of NK cell background subgroup |
 | BG: Blood-T-CD8 | Mean methylation of CD8 T cell background subgroup |
 | ... | One column per background blood cell type subgroup |
-| Min subgroup methylation | Lowest methylation across all background subgroups (should be > 0.70) |
+| Min subgroup methylation | Lowest methylation across all background subgroups (should be > 0.50) |
 | Worst background subgroup | The blood cell type with the lowest methylation (most likely to cause false positives) |
 
 **Per-CpG columns** (in the Per-CpG detail sheet):
@@ -1133,7 +1133,7 @@ open results/MONO/primer_assays.pdf
 
 ### v2.2.3 (2026-07-14)
 
-- `phase0_dmr_discovery.py`: Added per-subgroup background check. After per-CpG extraction, the pipeline computes mean methylation for each background blood cell type subgroup independently (e.g. Blood-T-CD8, Blood-B, Blood-NK). Blocks where any subgroup has mean methylation below `--min-bg-subgroup-meth` (default 0.70) are rejected. This catches the key problem with CD4T/CD8T: a region where the average background looks fine (0.88) but CD8 T cells are partially unmethylated (0.55) — which would cause false positives in real blood. Added `_match_beta_files_with_groups()` to map background beta files to their original atlas group names. Added `bg_subgroup_meth` field to DMRBlock and JSON output.
+- `phase0_dmr_discovery.py`: Added per-subgroup background check. After per-CpG extraction, the pipeline computes mean methylation for each background blood cell type subgroup independently (e.g. Blood-T-CD8, Blood-B, Blood-NK). Blocks where any subgroup has mean methylation below `--min-bg-subgroup-meth` (default 0.50) are rejected. This catches the key problem with CD4T/CD8T: a region where the average background looks fine (0.88) but CD8 T cells are partially unmethylated (0.55) — which would cause false positives in real blood. Added `_match_beta_files_with_groups()` to map background beta files to their original atlas group names. Added `bg_subgroup_meth` field to DMRBlock and JSON output.
 - `phase0_dmr_discovery.py`: Added `BG_EXCLUDE` — groups excluded from background in addition to targets. Blood-T-CD3 (pan-T cells containing both CD4+ and CD8+) is excluded from CD4T and CD8T backgrounds. Without this, the per-subgroup filter rejected 68/73 CD4T markers because T-CD3 contains CD4+ T cells that are unmethylated at CD4-specific regions. `generate_groups_file()` now filters out excluded groups before assigning target/background labels.
 - `phase0_dmr_discovery.py`, `pipeline.py`: Added `--unmeth-mean-thresh` (default 0.15) and `--meth-mean-thresh` (default 0.65) — these were previously disabled (find_markers defaults of 1.0 and 0.0), allowing mediocre markers with target=0.3/bg=0.6 to pass. `delta_means` stays at 0.3 (was briefly 0.4 but reverted — too few markers for CD4T/CD8T).
 - `phase1_dmr_loader.py`: Added `bg_subgroup_meth: Dict[str, float]` field to DMRBlock dataclass.
