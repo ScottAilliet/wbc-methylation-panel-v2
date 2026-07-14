@@ -527,8 +527,8 @@ def main():
                         help="Number of threads for find_markers")
     parser.add_argument("--top-markers", type=int, default=300,
                         help="Number of top markers per cell type")
-    parser.add_argument("--delta-means", type=float, default=0.4,
-                        help="Min methylation difference for find_markers (default 0.4)")
+    parser.add_argument("--delta-means", type=float, default=0.3,
+                        help="Min methylation difference for find_markers (default 0.3)")
     parser.add_argument("--unmeth-mean-thresh", type=float, default=0.15,
                         help="Target mean must be below this (default 0.15)")
     parser.add_argument("--meth-mean-thresh", type=float, default=0.65,

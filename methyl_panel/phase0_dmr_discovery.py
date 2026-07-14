@@ -80,6 +80,22 @@ BLOOD_GROUPS: List[str] = [
     "Blood-T-EffMem-CD8", "Blood-T-Naive-CD4", "Blood-T-Naive-CD8",
 ]
 
+# Groups to EXCLUDE from background for each cell type, in addition to
+# the target groups. Blood-T-CD3 is a pan-T cell population containing
+# both CD4+ and CD8+ T cells — it overlaps with CD4T and CD8T targets,
+# so it must be excluded from their backgrounds to avoid false rejections
+# in the per-subgroup filter. Similarly, CD4T excludes CD8T subgroups
+# and vice versa (they are too closely related to serve as clean
+# background for each other at the subgroup level — the per-subgroup
+# filter handles this, but excluding them from find_markers background
+# gives more markers to choose from).
+# For CD3T (pan-T), all T-cell subtypes are targets, so no exclusions
+# beyond the targets themselves.
+BG_EXCLUDE: Dict[str, List[str]] = {
+    "CD4T": ["Blood-T-CD3"],  # T-CD3 contains CD4+ T cells
+    "CD8T": ["Blood-T-CD3"],  # T-CD3 contains CD8+ T cells
+}
+
 # All valid cell type IDs
 VALID_CELL_TYPES = list(CELL_TYPE_TARGETS.keys())
 
@@ -121,10 +137,20 @@ def generate_groups_file(
         )
 
     target_groups = CELL_TYPE_TARGETS[cell_type_id]
+    exclude_groups = BG_EXCLUDE.get(cell_type_id, [])
     df = pd.read_csv(atlas_groups_csv)
 
     # Restrict to blood cell types only (exclude non-blood tissues)
     df = df[df['group'].isin(BLOOD_GROUPS)].copy()
+
+    # Exclude overlapping groups (e.g. T-CD3 for CD4T/CD8T) — these
+    # contain cells that overlap with the target and would cause false
+    # rejections in the per-subgroup filter.
+    if exclude_groups:
+        before = len(df)
+        df = df[~df['group'].isin(exclude_groups)].copy()
+        print(f"    Excluded {before - len(df)} samples from overlapping groups: "
+              f"{', '.join(exclude_groups)}")
 
     # The atlas groups CSV has columns: name, group
     # wgbstools renames the first column to 'fname', so 'name' is fine
@@ -236,7 +262,7 @@ def run_find_markers(
     cell_type_id: str,
     threads: int = 2,
     top_n: int = 300,
-    delta_means: float = 0.4,
+    delta_means: float = 0.3,
     min_cpg: int = 3,
     unmeth_mean_thresh: float = 0.15,
     meth_mean_thresh: float = 0.65,
@@ -919,7 +945,7 @@ def discover_dmrs(
     out_dir: str,
     threads: int = 2,
     top_n: int = 300,
-    delta_means: float = 0.4,
+    delta_means: float = 0.3,
     min_cpg: int = 3,
     wgbstools_path: Optional[str] = None,
     max_bg_samples: int = 30,
@@ -1078,8 +1104,8 @@ def main():
                         help='Output directory')
     parser.add_argument('--threads', type=int, default=2)
     parser.add_argument('--top', type=int, default=300)
-    parser.add_argument('--delta-means', type=float, default=0.4,
-                        help='Min methylation difference (default 0.4)')
+    parser.add_argument('--delta-means', type=float, default=0.3,
+                        help='Min methylation difference (default 0.3)')
     parser.add_argument('--unmeth-mean-thresh', type=float, default=0.15,
                         help='Target mean must be below this (default 0.15)')
     parser.add_argument('--meth-mean-thresh', type=float, default=0.65,
