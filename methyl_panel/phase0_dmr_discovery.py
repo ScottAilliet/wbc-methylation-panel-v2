@@ -673,6 +673,124 @@ def extract_percpg_methylation(
             print(f"  Processed {i+1}/{len(blocks)} blocks")
 
 
+def _subsample_background(
+    background_betas: List[str],
+    max_bg_samples: int,
+    bg_group_map: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """
+    Subsample background beta files, preserving at least one sample per
+    subgroup.
+
+    A naive ``background_betas[:max_bg_samples]`` truncation can silently
+    drop entire subgroups when they happen to be at the end of the list.
+    For example, with 33 blood-only background samples and max_bg_samples=30,
+    the last 3 samples (both Blood-B-Mem) are dropped, making Blood-B-Mem
+    invisible in per-subgroup methylation and the per-subgroup filter.
+
+    This function groups background samples by atlas subgroup (using
+    bg_group_map), keeps at least one sample per subgroup, then fills
+    remaining slots proportionally. If bg_group_map is None or empty,
+    falls back to simple truncation.
+
+    Args:
+        background_betas: Full list of background beta file paths
+        max_bg_samples: Maximum number of background samples to keep
+        bg_group_map: Maps beta_path -> atlas group name
+
+    Returns:
+        Subsampled list of background beta file paths
+    """
+    if len(background_betas) <= max_bg_samples:
+        return list(background_betas)
+
+    if not bg_group_map:
+        return background_betas[:max_bg_samples]
+
+    # Group beta paths by subgroup
+    groups: Dict[str, List[str]] = {}
+    for bp in background_betas:
+        g = bg_group_map.get(bp, "unknown")
+        groups.setdefault(g, []).append(bp)
+
+    n_groups = len(groups)
+    if n_groups == 0:
+        return background_betas[:max_bg_samples]
+
+    # If we can fit all samples, do so
+    if len(background_betas) <= max_bg_samples:
+        return list(background_betas)
+
+    # Allocate slots: at least 1 per group, distribute the rest proportionally.
+    # Use the largest-remainder method to avoid rounding errors that could
+    # cause over-allocation followed by a trim that drops a group's only sample.
+    group_sizes = {g: len(bps) for g, bps in groups.items()}
+    total = sum(group_sizes.values())
+    slots = max_bg_samples
+
+    # If more groups than slots, we can't guarantee 1 per group.
+    # Take 1 sample from the largest groups until we fill slots.
+    if n_groups >= slots:
+        result: List[str] = []
+        for g in sorted(groups, key=lambda x: group_sizes[x], reverse=True):
+            if len(result) >= slots:
+                break
+            result.append(groups[g][0])
+        return result
+
+    # Step 1: guarantee 1 per group
+    allocation = {g: 1 for g in groups}
+    remaining = slots - n_groups
+
+    # Step 2: proportional allocation of remaining slots using largest remainder
+    if remaining > 0:
+        exact = {g: remaining * group_sizes[g] / total for g in groups}
+        floor = {g: int(exact[g]) for g in groups}
+        allocated = sum(floor.values())
+        leftover = remaining - allocated
+
+        # Distribute leftover by largest fractional remainder
+        remainders = sorted(
+            groups.keys(),
+            key=lambda g: exact[g] - floor[g],
+            reverse=True,
+        )
+        for g in remainders[:leftover]:
+            floor[g] += 1
+
+        for g in groups:
+            allocation[g] = 1 + min(floor[g], group_sizes[g] - 1)
+
+    # Build result from allocation
+    result: List[str] = []
+    for g, bps in groups.items():
+        result.extend(bps[:allocation[g]])
+
+    # If still over (shouldn't happen with largest-remainder, but safety),
+    # trim from groups with the most samples
+    if len(result) > slots:
+        # Sort groups by current allocation descending, trim from the top
+        over = len(result) - slots
+        for g in sorted(groups, key=lambda x: allocation[x], reverse=True):
+            if over <= 0:
+                break
+            trim = min(over, allocation[g] - 1)  # never below 1
+            allocation[g] -= trim
+            over -= trim
+        result = []
+        for g, bps in groups.items():
+            result.extend(bps[:allocation[g]])
+
+    # If under-allocated, fill from groups that have extras
+    if len(result) < slots:
+        used = set(result)
+        for bp in background_betas:
+            if bp not in used and len(result) < slots:
+                result.append(bp)
+
+    return result
+
+
 def extract_percpg_methylation_with_indices(
     blocks: List[DMRBlock],
     cpg_indices: List[Tuple[int, int]],  # (startCpG, endCpG) per block
@@ -701,7 +819,9 @@ def extract_percpg_methylation_with_indices(
         max_bg_samples: Maximum background samples to use (for speed)
         bg_group_map: Maps beta_path -> atlas group name (e.g. "Blood-T-CD8")
     """
-    bg_betas = background_betas[:max_bg_samples]
+    bg_betas = _subsample_background(
+        background_betas, max_bg_samples, bg_group_map
+    )
     print(f"  Per-CpG extraction: {len(target_betas)} target, "
           f"{len(bg_betas)} background samples")
 

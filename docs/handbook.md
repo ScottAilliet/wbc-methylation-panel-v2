@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.3
+**Version:** Pipeline v2.2.4
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-14
 
@@ -11,6 +11,18 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
+
+### What Changed in v2.2.4
+
+This version fixes two bugs in per-CpG methylation extraction and Excel export that affected data integrity.
+
+Key changes:
+
+1. **Fixed: Blood-B-Mem silently dropped from MONO/NK/GRAN backgrounds.** The `max_bg_samples=30` truncation in `extract_percpg_methylation_with_indices()` used a naive `background_betas[:30]` slice. For MONO/NK/GRAN, there are 33 background samples, and the last 3 happened to be both Blood-B-Mem samples — so the entire Blood-B-Mem subgroup disappeared from per-subgroup methylation data, the per-subgroup filter, and the Excel output. Replaced with `_subsample_background()`, a subgroup-aware subsampling function that guarantees at least one sample per subgroup using the largest-remainder allocation method. All 13 blood subgroups are now preserved for every cell type.
+
+2. **Fixed: Excel showed all 14 subgroup columns on every sheet.** `export_dmr_excel.py` collected all subgroup names across all cell types and put them on every per-cell-type sheet. For CD4T, 5 columns were empty (4 CD4 target groups + excluded Blood-T-CD3); for CD3T, 9 columns were empty. Now each per-cell-type sheet only includes columns for subgroups that actually appear in that cell type's `bg_subgroup_meth` data. The "All blocks summary" sheet still shows all subgroups (correct for cross-cell-type comparison).
+
+3. **Audit finding: repo 1 vs repo 2 delta differences explained.** Repo 1 used the full 18-cell-type atlas (45 samples) as find_markers background but accidentally computed per-CpG cleanliness scores on a blood-only background (the `bg_betas[:30]` truncation dropped all non-blood samples, which were at the end of the list). This meant find_markers found markers with large deltas (blood vs liver/colon) while per-CpG scoring used blood-only background. Repo 2 correctly uses blood-only for both find_markers and per-CpG scoring, giving smaller but biologically correct deltas for a WBC assay.
 
 ### What Changed in v2.2.3
 
@@ -1032,7 +1044,7 @@ wbc-methylation-panel-v2/
 │   ├── immune_groups.csv            # Immune cell type groups (7 types)
 │   └── download_list_nonimmune.csv  # Non-immune sample download list
 ├── docs/
-│   ├── handbook.md                  # This document (v2.2.3)
+│   ├── handbook.md                  # This document (v2.2.4)
 │   ├── handbook_v2.2.md             # Previous handbook version (preserved)
 │   ├── handbook_v2.1.md             # Previous handbook version (preserved)
 │   ├── handbook_v1.md               # Original handbook version (preserved)
@@ -1130,6 +1142,11 @@ open results/MONO/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.2.4 (2026-07-14)
+
+- `phase0_dmr_discovery.py`: Fixed subgroup-aware background subsampling. `extract_percpg_methylation_with_indices()` used `background_betas[:max_bg_samples]` which silently dropped entire subgroups (Blood-B-Mem was entirely dropped for MONO/NK/GRAN because both samples were at positions 31-33 of 33). Added `_subsample_background()` function that groups background samples by atlas subgroup, guarantees at least 1 sample per subgroup, then distributes remaining slots proportionally using the largest-remainder method. Handles edge cases: more groups than max (takes 1 from largest groups), no group map (falls back to simple truncation), empty input.
+- `export_dmr_excel.py`: Fixed per-cell-type sheets showing all 14 subgroup columns. Each sheet now only includes columns for subgroups present in that cell type's `bg_subgroup_meth` data. The "All blocks summary" sheet retains all subgroup columns for cross-cell-type comparison. Previously, CD4T had 5 empty columns (4 CD4 target groups + excluded Blood-T-CD3), CD3T had 9 empty columns — making the data look misaligned.
 
 ### v2.2.3 (2026-07-14)
 

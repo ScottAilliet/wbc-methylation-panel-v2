@@ -192,19 +192,26 @@ def export_excel(json_paths, top_n, output_path):
         cell_type = top_blocks[0].get("cell_type_id", "Unknown")
         print(f"  {json_path}: {len(blocks)} blocks → top {len(top_blocks)} for {cell_type}")
 
-        # Per-cell-type sheet: block-level summary with per-subgroup columns
-        block_rows = [format_block_row(b, subgroup_names) for b in top_blocks]
+        # Collect subgroups that actually appear in THIS cell type's data
+        ct_subgroups = set()
+        for b in top_blocks:
+            ct_subgroups.update(b.get("bg_subgroup_meth", {}).keys())
+        ct_subgroup_names = sorted(ct_subgroups)
+
+        # Per-cell-type sheet: only show columns for this cell type's background subgroups
+        block_rows = [format_block_row(b, ct_subgroup_names) for b in top_blocks]
         block_headers = [name for name, _ in BLOCK_COLUMNS]
-        # Add per-subgroup columns
-        for sg in subgroup_names:
+        for sg in ct_subgroup_names:
             block_headers.append(f"BG: {sg}")
         block_headers.append("Min subgroup methylation")
         block_headers.append("Worst background subgroup")
         ws = wb.create_sheet(title=cell_type[:31])  # Excel sheet name max 31 chars
         write_sheet(ws, block_headers, block_rows)
 
-        # Collect for summary sheets
-        all_block_rows.extend(block_rows)
+        # Collect for summary sheets (use all subgroup names for the summary)
+        all_block_rows.extend(
+            [format_block_row(b, subgroup_names) for b in top_blocks]
+        )
         for b in top_blocks:
             all_cpg_rows.extend(format_cpg_rows(b))
 
