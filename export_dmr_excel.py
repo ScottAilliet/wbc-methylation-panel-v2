@@ -47,6 +47,7 @@ THIN_BORDER = Border(
 # Block-level columns (one row per DMR block)
 BLOCK_COLUMNS = [
     ("Cell type", "cell_type_id"),
+    ("Direction", "direction"),
     ("Rank", "rank"),
     ("Seq ID", "seq_id"),
     ("Chromosome", "chrom"),
@@ -65,6 +66,7 @@ BLOCK_COLUMNS = [
 # Per-CpG columns (one row per CpG within each block)
 CPG_COLUMNS = [
     ("Cell type", "cell_type_id"),
+    ("Direction", "direction"),
     ("Seq ID", "seq_id"),
     ("Rank", "rank"),
     ("Chromosome", "chrom"),
@@ -97,7 +99,10 @@ def format_block_row(block: dict, subgroup_names: list = None) -> dict:
     """
     row = {}
     for display_name, key in BLOCK_COLUMNS:
-        row[display_name] = block.get(key, "")
+        val = block.get(key, "")
+        if key == "direction" and not val:
+            val = "U"
+        row[display_name] = val
 
     if subgroup_names is not None:
         bg_sg = block.get("bg_subgroup_meth", {})
@@ -125,10 +130,13 @@ def format_block_row(block: dict, subgroup_names: list = None) -> dict:
 def format_cpg_rows(block: dict) -> list:
     """Extract one row per CpG from a block dict."""
     rows = []
+    direction = block.get("direction", "U")
     for cpg in block.get("cpg_sites", []):
         row = {}
         for display_name, key in CPG_COLUMNS:
-            if key in cpg:
+            if key == "direction":
+                row[display_name] = direction
+            elif key in cpg:
                 row[display_name] = cpg[key]
             else:
                 row[display_name] = block.get(key, "")
@@ -200,7 +208,10 @@ def export_excel(json_paths, top_n, output_path):
         top_blocks = blocks_sorted[:top_n]
 
         cell_type = top_blocks[0].get("cell_type_id", "Unknown")
-        print(f"  {json_path}: {len(blocks)} blocks → top {len(top_blocks)} for {cell_type}")
+        is_hyper = top_blocks[0].get("direction", "U") == "M"
+        direction_label = "hyper" if is_hyper else "hypo"
+        sheet_name = f"{cell_type}_{direction_label}"[:31]
+        print(f"  {json_path}: {len(blocks)} blocks → top {len(top_blocks)} for {cell_type} ({direction_label})")
 
         # Collect subgroups that actually appear in THIS cell type's data
         ct_subgroups = set()
@@ -221,7 +232,7 @@ def export_excel(json_paths, top_n, output_path):
         if has_hyper:
             block_headers.append("Max subgroup methylation")
         block_headers.append("Worst background subgroup")
-        ws = wb.create_sheet(title=cell_type[:31])  # Excel sheet name max 31 chars
+        ws = wb.create_sheet(title=sheet_name)
         write_sheet(ws, block_headers, block_rows)
 
         # Collect for summary sheets (use all subgroup names for the summary)

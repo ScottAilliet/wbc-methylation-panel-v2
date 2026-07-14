@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.6
+**Version:** Pipeline v2.2.7
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-14
 
@@ -11,6 +11,22 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
+
+### What Changed in v2.2.7
+
+This version fixes five data quality issues found during analysis of the v2.2.6 results.
+
+Key changes:
+
+1. **Fixed: blocks with empty or partial bg_subgroup_meth bypassed the per-subgroup filter.** The filter code had `if not b.bg_subgroup_meth: filtered.append(b); continue` — blocks with no subgroup data passed automatically. And blocks with partial data (e.g. 4 of 13 subgroups present) were checked only on the present subgroups; the 9 missing ones were silently ignored. Now blocks with empty or partial bg_subgroup_meth are **rejected**. Missing subgroup data means we cannot verify that subgroup is sufficiently methylated — the safe choice is to reject. The rejection report now categorizes rejections as "no subgroup data", "partial subgroup data", or threshold violations.
+
+2. **Added: cleanliness score filter (CS >= 0.6).** Blocks with CS < 0.6 (low coverage, high variability, or no usable CpG data) were previously computed but never filtered out. 6 blocks in v2.2.6 had CS < 0.6 (3 NK with CS=0, 1 GRAN with CS=0.34, 1 MONO with CS=0.53, 1 CD3T hyper with CS=0.37). Now they are rejected at Step 0e1, before the per-subgroup filter runs.
+
+3. **Added: sex chromosome exclusion (chrX, chrY, chrM).** 2 blocks in v2.2.6 were on chrX (KDM6A, SEPT6). chrX has copy number differences between sexes (females 2 copies, males 1) and X-inactivation methylation differences, making dPCR quantification unreliable. chrY is male-only. chrM has different copy number biology. All three are now excluded at Step 0d2, before per-CpG extraction.
+
+4. **Fixed: hyper sheet naming in Excel export.** When hypo and hyper markers for the same cell type were exported to one workbook, the hyper sheets got names like `BCELL1`, `CD3T1` — not obviously "hypermethylated." Now sheets are named `BCELL_hypo` and `BCELL_hyper` (or `MONO_hypo`, `NK_hyper`, etc.).
+
+5. **Added: Direction column to all Excel sheets.** Block-level sheets, the summary sheet, and the Per-CpG detail sheet now include a Direction column showing `U` (hypomethylated) or `M` (hypermethylated), so you can always tell which type of marker a row represents.
 
 ### What Changed in v2.2.6
 
@@ -474,10 +490,12 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 2. Generates a beta list file — paths to all .beta files
 3. Runs `wgbstools find_markers` — discovers DMRs with quality filters: delta_means ≥ 0.3, target mean < 0.15 (hypo) or > 0.65 (hyper), background mean > 0.65 (hypo) or < 0.15 (hyper), min 3 CpGs, top 1000. Uses `--only_hypo` (default) or `--only_hyper` (with `--only-hyper`). Ranks by blood delta — the correct metric for blood cell separation.
 4. Parses the output BED file
-5. Extracts per-CpG methylation from beta files for each DMR (blood-only background)
-6. Computes cleanliness scores — for hypo markers: target near-zero, background near-one; for hyper markers: target near-one, background near-zero. Both include consistency and coverage components.
-7. Computes per-subgroup background methylation — for hypo markers, verifies that EACH background blood cell type is sufficiently methylated (≥ 0.70); for hyper markers, verifies each is sufficiently unmethylated (≤ 0.30). Rejects blocks where any single subgroup fails.
-8. Saves `dmr_blocks.json` — same format as Step 1, with a `direction` field (`"U"` for hypo, `"M"` for hyper), so steps 2–9 work unchanged
+5. Excludes sex chromosomes (chrX, chrY, chrM) — these have copy number or methylation differences between sexes that make dPCR quantification unreliable
+6. Extracts per-CpG methylation from beta files for each DMR (blood-only background)
+7. Computes cleanliness scores — for hypo markers: target near-zero, background near-one; for hyper markers: target near-one, background near-zero. Both include consistency and coverage components.
+8. Filters by cleanliness score (CS >= 0.6) — rejects blocks with poor per-CpG data quality (low coverage, high variability)
+9. Computes per-subgroup background methylation — for hypo markers, verifies that EACH background blood cell type is sufficiently methylated (≥ 0.70); for hyper markers, verifies each is sufficiently unmethylated (≤ 0.30). Rejects blocks where any single subgroup fails, and also rejects blocks with missing subgroup data (cannot verify = reject).
+10. Saves `dmr_blocks.json` — same format as Step 1, with a `direction` field (`"U"` for hypo, `"M"` for hyper), so steps 2–9 work unchanged
 
 **Why delta values are lower with blood-only background:** The background is restricted to other blood cell types (36 samples), not the full 207-sample atlas. Blood cells are more epigenetically similar to each other than to non-blood tissues. MONO vs T cells gives delta ~0.88, while MONO vs liver gives delta ~0.95. CD4T vs CD8T gives delta ~0.85 because CD4 and CD8 T cells are closely related lineages. **This is correct for a WBC assay** — the deltas that matter are against cells that will be in the same tube. The per-subgroup filter ensures that even the most similar background cell type is sufficiently methylated.
 
@@ -1191,6 +1209,13 @@ open results/MONO/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.2.7 (2026-07-14)
+
+- `phase0_dmr_discovery.py`: Fixed per-subgroup filter bypass. Blocks with empty `bg_subgroup_meth` (no subgroup data due to low WGBS coverage) were silently passing the filter. Blocks with partial `bg_subgroup_meth` (some subgroups missing) were checked only on present subgroups. Now both are rejected — missing subgroup data means we cannot verify that subgroup, so the safe choice is to reject. Rejection report now categorizes as "no subgroup data", "partial subgroup data", or threshold violations.
+- `phase0_dmr_discovery.py`: Added cleanliness score filter (CS >= 0.6) at Step 0e1, before the per-subgroup filter. Blocks with poor per-CpG data quality (low coverage, high variability, CS=0) are now rejected. Previously these were computed but never filtered.
+- `phase0_dmr_discovery.py`: Added sex chromosome exclusion (chrX, chrY, chrM) at Step 0d2, before per-CpG extraction. chrX has copy number differences between sexes and X-inactivation methylation differences; chrY is male-only; chrM has different copy number biology. All make dPCR quantification unreliable.
+- `export_dmr_excel.py`: Fixed hyper sheet naming. Sheets are now named `{CT}_hypo` and `{CT}_hyper` instead of `{CT}` and `{CT}1`. Added Direction column (`U`/`M`) to block-level sheets, summary sheet, and Per-CpG detail sheet.
 
 ### v2.2.6 (2026-07-14)
 

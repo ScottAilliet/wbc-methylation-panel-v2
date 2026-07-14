@@ -1263,6 +1263,18 @@ def discover_dmrs(
         print("    WARNING: No markers found! Check find_markers parameters.")
         return []
 
+    # Step 0d2: Exclude sex chromosomes (chrX, chrY)
+    # chrX has copy number differences between sexes (females 2, males 1)
+    # and X-inactivation methylation differences, making dPCR quantification
+    # unreliable. chrY is male-only. Both should be excluded from dPCR assays.
+    before_sex = len(blocks)
+    sex_chroms = {"chrX", "chrY", "chrM"}
+    sex_blocks = [b for b in blocks if b.chrom in sex_chroms]
+    if sex_blocks:
+        blocks[:] = [b for b in blocks if b.chrom not in sex_chroms]
+        print(f"  Step 0d2: Excluded {before_sex - len(blocks)} blocks on sex/mito chromosomes")
+    print(f"    {len(blocks)} blocks remain after sex chromosome exclusion")
+
     # Step 0e: Extract per-CpG methylation (always blood-only background)
     print(f"  Step 0e: Extracting per-CpG methylation from beta files (blood-only)")
     target_betas, bg_betas, bg_group_map = _match_beta_files_with_groups(
@@ -1279,6 +1291,17 @@ def discover_dmrs(
     good = sum(1 for b in blocks if b.cleanliness_score >= 0.6)
     print(f"    Cleanliness: {good}/{len(blocks)} blocks score >= 0.6")
 
+    # Step 0e1: Cleanliness score filter
+    # Reject blocks with CS < 0.6 — these have poor per-CpG data quality
+    # (low coverage, high variability, or no usable CpG data at all).
+    before_cs = len(blocks)
+    low_cs_blocks = [b for b in blocks if b.cleanliness_score < 0.6]
+    if low_cs_blocks:
+        blocks[:] = [b for b in blocks if b.cleanliness_score >= 0.6]
+        print(f"  Step 0e1: Cleanliness filter (CS >= 0.6): "
+              f"rejected {before_cs - len(blocks)}/{before_cs} blocks")
+    print(f"    {len(blocks)} blocks remain after cleanliness filter")
+
     # Step 0e2: Per-subgroup background filter
     # For hypomethylated markers: reject blocks where any background
     # subgroup has mean methylation BELOW the threshold (partially
@@ -1286,6 +1309,10 @@ def discover_dmrs(
     # For hypermethylated markers: reject blocks where any background
     # subgroup has mean methylation ABOVE (1 - threshold) (partially
     # methylated → false positives in real blood).
+    #
+    # Blocks with empty or partial bg_subgroup_meth are REJECTED, not
+    # passed. Missing subgroup data means we cannot verify that subgroup
+    # is sufficiently methylated/unmethylated — the safe choice is to reject.
     if bg_group_map and min_bg_subgroup_meth > 0:
         if only_hyper:
             max_bg_subgroup_meth = 1.0 - min_bg_subgroup_meth
@@ -1293,12 +1320,24 @@ def discover_dmrs(
         else:
             filter_desc = f"min >= {min_bg_subgroup_meth:.2f}"
 
+        # Expected set of background subgroups (from the group map)
+        expected_subgroups = set(bg_group_map.values())
+
         before = len(blocks)
         filtered = []
         rejected_blocks = []
         for b in blocks:
             if not b.bg_subgroup_meth:
-                filtered.append(b)
+                # No subgroup data at all — reject (cannot verify)
+                rejected_blocks.append(b)
+                continue
+            # Check for missing subgroups (partial data)
+            present_subgroups = set(b.bg_subgroup_meth.keys())
+            missing = expected_subgroups - present_subgroups
+            if missing:
+                # Partial data — some subgroups have no coverage.
+                # Reject: we cannot verify the missing subgroups.
+                rejected_blocks.append(b)
                 continue
             if only_hyper:
                 max_subgroup = max(b.bg_subgroup_meth.values())
@@ -1316,8 +1355,22 @@ def discover_dmrs(
         if rejected > 0:
             print(f"  Step 0e2: Per-subgroup filter ({filter_desc}): "
                   f"rejected {rejected}/{before} blocks")
+            # Categorize rejections
+            no_data = sum(1 for b in rejected_blocks if not b.bg_subgroup_meth)
+            partial_data = sum(1 for b in rejected_blocks
+                             if b.bg_subgroup_meth
+                             and (expected_subgroups - set(b.bg_subgroup_meth.keys())))
+            threshold_rejected = rejected - no_data - partial_data
+            if no_data:
+                print(f"    {no_data} blocks rejected (no subgroup data — low coverage)")
+            if partial_data:
+                print(f"    {partial_data} blocks rejected (partial subgroup data — some subgroups missing)")
             rejected_subgroups = {}
             for b in rejected_blocks:
+                if not b.bg_subgroup_meth:
+                    continue
+                if expected_subgroups - set(b.bg_subgroup_meth.keys()):
+                    continue  # partial data, skip subgroup breakdown
                 if only_hyper:
                     worst = max(b.bg_subgroup_meth, key=b.bg_subgroup_meth.get)
                     reason = "partially methylated"
