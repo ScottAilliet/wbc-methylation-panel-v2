@@ -182,6 +182,76 @@ def generate_groups_file(
     return output_path
 
 
+def generate_groups_file_full_atlas(
+    cell_type_id: str,
+    atlas_groups_csv: str,
+    output_path: str,
+    beta_dir: Optional[str] = None,
+) -> str:
+    """
+    Generate a groups CSV using the FULL atlas (all 207 samples) as background.
+
+    This is used for the hybrid approach: find_markers runs against the full
+    atlas to find a large candidate pool, then per-CpG extraction + the
+    per-subgroup filter use blood-only background for quality control.
+
+    Target samples (all subtypes merged) get group = cell_type_id.
+    Background = ALL other atlas samples (blood + non-blood tissues).
+    BG_EXCLUDE groups are still excluded (e.g. T-CD3 for CD4T/CD8T).
+
+    Args:
+        cell_type_id: One of MONO, BCELL, NK, GRAN, CD3T, CD4T, CD8T
+        atlas_groups_csv: Path to data/full_atlas_groups.csv
+        output_path: Where to write the groups CSV
+        beta_dir: If provided, filter to samples with .beta files here
+
+    Returns:
+        Path to the generated groups CSV
+    """
+    if cell_type_id not in CELL_TYPE_TARGETS:
+        raise ValueError(
+            f"Unknown cell type '{cell_type_id}'. "
+            f"Valid options: {VALID_CELL_TYPES}"
+        )
+
+    target_groups = CELL_TYPE_TARGETS[cell_type_id]
+    exclude_groups = BG_EXCLUDE.get(cell_type_id, [])
+    df = pd.read_csv(atlas_groups_csv)
+
+    # Exclude overlapping groups (e.g. T-CD3 for CD4T/CD8T)
+    if exclude_groups:
+        before = len(df)
+        df = df[~df['group'].isin(exclude_groups)].copy()
+        print(f"    Excluded {before - len(df)} samples from overlapping groups: "
+              f"{', '.join(exclude_groups)}")
+
+    # Merge target subtypes into one group, everything else = background
+    df['group'] = df['group'].apply(
+        lambda g: cell_type_id if g in target_groups else 'background'
+    )
+
+    # Filter to samples that have beta files, if beta_dir is provided
+    if beta_dir:
+        import glob
+        available = set()
+        for bp in glob.glob(os.path.join(beta_dir, "*.beta")):
+            stem = os.path.basename(bp)
+            if stem.endswith('.beta'):
+                stem = stem[:-5]
+            available.add(stem)
+        name_col = df.columns[0]
+        before = len(df)
+        df = df[df[name_col].isin(available)]
+        after = len(df)
+        n_target = (df['group'] != 'background').sum()
+        n_bg = (df['group'] == 'background').sum()
+        print(f"    Full atlas groups file: {after}/{before} samples have beta files "
+              f"({n_target} target, {n_bg} background)")
+
+    df.to_csv(output_path, index=False)
+    return output_path
+
+
 # ---------------------------------------------------------------------------
 # Beta list file generation
 # ---------------------------------------------------------------------------
@@ -267,6 +337,7 @@ def run_find_markers(
     unmeth_mean_thresh: float = 0.15,
     meth_mean_thresh: float = 0.65,
     wgbstools_path: Optional[str] = None,
+    only_hyper: bool = False,
 ) -> str:
     """
     Run wgbstools find_markers for one cell type.
@@ -284,6 +355,8 @@ def run_find_markers(
         unmeth_mean_thresh: Target mean must be below this (default 0.15)
         meth_mean_thresh: Background mean must be above this (default 0.65)
         wgbstools_path: Path to wgbstools executable
+        only_hyper: If True, find hypermethylated markers (target methylated,
+            background unmethylated) instead of hypomethylated markers.
 
     Returns:
         Path to the output BED file (Markers.{cell_type_id}.bed)
@@ -320,7 +393,7 @@ def run_find_markers(
         '--groups_file', groups_file,
         '--beta_list_file', beta_list,
         '--targets', cell_type_id,
-        '--only_hypo',
+        '--only_hyper' if only_hyper else '--only_hypo',
         '--delta_means', str(delta_means),
         '--min_cpg', str(min_cpg),
         '--unmeth_mean_thresh', str(unmeth_mean_thresh),
@@ -799,6 +872,7 @@ def extract_percpg_methylation_with_indices(
     min_cov: int = 5,
     max_bg_samples: int = 30,
     bg_group_map: Optional[Dict[str, str]] = None,
+    only_hyper: bool = False,
 ) -> None:
     """
     Extract per-CpG methylation using CpG indices from find_markers.
@@ -846,7 +920,7 @@ def extract_percpg_methylation_with_indices(
         bg_cpg_mean = np.nanmean(bg_mat, axis=0)
 
         # Compute cleanliness score
-        score = _cleanliness_score(tg_mat, bg_mat)
+        score = _cleanliness_score(tg_mat, bg_mat, only_hyper=only_hyper)
 
         # Per-subgroup background methylation
         if bg_group_map:
@@ -894,22 +968,29 @@ def extract_percpg_methylation_with_indices(
 def _cleanliness_score(
     tg_matrix: np.ndarray,
     bg_matrix: np.ndarray,
+    only_hyper: bool = False,
 ) -> float:
     """
     Score how suitable a marker block is for bisulfite PCR.
 
-    Components (each 0-1, higher = better):
+    For hypomethylated markers (default):
         A. tg_near_zero: 1 - max(per-CpG mean in target)
         B. bg_near_one: min(per-CpG mean in background)
         C. tg_consistency: 1 - 2*mean(per-CpG std across target samples)
         D. bg_consistency: 1 - 2*mean(per-CpG std across background samples)
         E. coverage: fraction of CpGs with data in >=50% of samples
 
+    For hypermethylated markers (only_hyper=True):
+        A. tg_near_one: min(per-CpG mean in target)
+        B. bg_near_zero: 1 - max(per-CpG mean in background)
+        C, D, E are the same (consistency and coverage are direction-agnostic)
+
     Final score = mean(A, B, C, D) * E
 
     Args:
         tg_matrix: (n_target_samples, n_cpgs) methylation fractions
         bg_matrix: (n_bg_samples, n_cpgs) methylation fractions
+        only_hyper: If True, score for hypermethylated markers
 
     Returns:
         Cleanliness score (0-1)
@@ -917,8 +998,15 @@ def _cleanliness_score(
     tg_cpg_mean = np.nanmean(tg_matrix, axis=0)
     bg_cpg_mean = np.nanmean(bg_matrix, axis=0)
 
-    A = max(0.0, float(1.0 - np.nanmax(tg_cpg_mean))) if not np.all(np.isnan(tg_cpg_mean)) else 0.0
-    B = max(0.0, float(np.nanmin(bg_cpg_mean))) if not np.all(np.isnan(bg_cpg_mean)) else 0.0
+    if only_hyper:
+        # Hyper: target should be near 1, background near 0
+        A = max(0.0, float(np.nanmin(tg_cpg_mean))) if not np.all(np.isnan(tg_cpg_mean)) else 0.0
+        B = max(0.0, float(1.0 - np.nanmax(bg_cpg_mean))) if not np.all(np.isnan(bg_cpg_mean)) else 0.0
+    else:
+        # Hypo: target should be near 0, background near 1
+        A = max(0.0, float(1.0 - np.nanmax(tg_cpg_mean))) if not np.all(np.isnan(tg_cpg_mean)) else 0.0
+        B = max(0.0, float(np.nanmin(bg_cpg_mean))) if not np.all(np.isnan(bg_cpg_mean)) else 0.0
+
     C = max(0.0, 1.0 - 2.0 * float(np.nanmean(np.nanstd(tg_matrix, axis=0))))
     D = max(0.0, 1.0 - 2.0 * float(np.nanmean(np.nanstd(bg_matrix, axis=0))))
 
@@ -1039,6 +1127,7 @@ def save_blocks_json(blocks: List[DMRBlock], output_path: str) -> None:
             "target_mean_meth": b.target_mean_meth,
             "background_mean_meth": b.background_mean_meth,
             "delta_means": b.delta_means,
+            "direction": b.direction,
             "bg_subgroup_meth": b.bg_subgroup_meth if b.bg_subgroup_meth else {},
             "cpg_sites": [
                 {"label": c.label, "position": c.position,
@@ -1072,7 +1161,9 @@ def discover_dmrs(
     skip_find_markers: bool = False,
     unmeth_mean_thresh: float = 0.15,
     meth_mean_thresh: float = 0.65,
-    min_bg_subgroup_meth: float = 0.50,
+    min_bg_subgroup_meth: float = 0.70,
+    use_full_atlas: bool = False,
+    only_hyper: bool = False,
 ) -> List[DMRBlock]:
     """
     Full DMR discovery pipeline for one cell type.
@@ -1085,7 +1176,7 @@ def discover_dmrs(
         out_dir: Output directory
         threads: Threads for find_markers
         top_n: Top N markers to keep
-        delta_means: Min methylation difference (default 0.4)
+        delta_means: Min methylation difference (default 0.3)
         min_cpg: Min CpGs per block
         wgbstools_path: Path to wgbstools executable
         max_bg_samples: Max background samples for per-CpG extraction
@@ -1093,21 +1184,45 @@ def discover_dmrs(
         unmeth_mean_thresh: Target mean must be below this (default 0.15)
         meth_mean_thresh: Background mean must be above this (default 0.65)
         min_bg_subgroup_meth: Reject blocks where any background subgroup
-            has mean methylation below this (default 0.70)
+            has mean methylation below this (default 0.50).
+            For hypermethylated markers (only_hyper=True), this becomes
+            the MAX: reject blocks where any subgroup is ABOVE
+            (1 - min_bg_subgroup_meth).
+        use_full_atlas: If True, use full atlas (all 207 samples) as
+            find_markers background to get more candidates, then apply
+            blood-only per-subgroup filter for quality control (hybrid
+            approach). If False, use blood-only for both.
+        only_hyper: If True, find hypermethylated markers (target
+            methylated, background unmethylated) instead of
+            hypomethylated markers.
 
     Returns:
         List of DMRBlock objects with per-CpG data
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    # Step 0a: Generate groups file
-    print(f"\n  Step 0a: Generating groups file for {cell_type_id}")
-    groups_file = os.path.join(out_dir, f'groups_{cell_type_id}.csv')
-    generate_groups_file(cell_type_id, groups_csv, groups_file, beta_dir=beta_dir)
-    n_target = sum(1 for _, r in pd.read_csv(groups_file).iterrows()
+    marker_type = "hypermethylated" if only_hyper else "hypomethylated"
+    bg_mode = "full atlas" if use_full_atlas else "blood-only"
+
+    # Step 0a: Generate groups file(s)
+    # For the hybrid approach, find_markers uses the full atlas (more
+    # candidates), but per-CpG extraction + per-subgroup filter use
+    # blood-only background (quality control).
+    print(f"\n  Step 0a: Generating groups file for {cell_type_id} "
+          f"({marker_type}, {bg_mode} background)")
+    blood_groups_file = os.path.join(out_dir, f'groups_{cell_type_id}_blood.csv')
+    generate_groups_file(cell_type_id, groups_csv, blood_groups_file, beta_dir=beta_dir)
+
+    if use_full_atlas:
+        fm_groups_file = os.path.join(out_dir, f'groups_{cell_type_id}_atlas.csv')
+        generate_groups_file_full_atlas(cell_type_id, groups_csv, fm_groups_file, beta_dir=beta_dir)
+    else:
+        fm_groups_file = blood_groups_file
+
+    n_target = sum(1 for _, r in pd.read_csv(fm_groups_file).iterrows()
                    if r['group'] != 'background')
-    print(f"    {n_target} target samples, "
-          f"{len(pd.read_csv(groups_file)) - n_target} background")
+    n_bg = len(pd.read_csv(fm_groups_file)) - n_target
+    print(f"    find_markers: {n_target} target, {n_bg} background ({bg_mode})")
 
     # Step 0b: Generate beta list
     print(f"  Step 0b: Generating beta list")
@@ -1122,9 +1237,9 @@ def discover_dmrs(
     if skip_find_markers and os.path.isfile(bed_path):
         print(f"  Step 0c: Skipping find_markers (using existing {bed_path})")
     else:
-        print(f"  Step 0c: Running wgbstools find_markers")
+        print(f"  Step 0c: Running wgbstools find_markers ({marker_type})")
         bed_path = run_find_markers(
-            groups_file=groups_file,
+            groups_file=fm_groups_file,
             beta_list=beta_list,
             blocks_file=blocks_file,
             out_dir=fm_out_dir,
@@ -1136,6 +1251,7 @@ def discover_dmrs(
             unmeth_mean_thresh=unmeth_mean_thresh,
             meth_mean_thresh=meth_mean_thresh,
             wgbstools_path=wgbstools_path,
+            only_hyper=only_hyper,
         )
 
     # Step 0d: Parse BED output
@@ -1147,15 +1263,16 @@ def discover_dmrs(
         print("    WARNING: No markers found! Check find_markers parameters.")
         return []
 
-    # Step 0e: Extract per-CpG methylation
-    print(f"  Step 0e: Extracting per-CpG methylation from beta files")
+    # Step 0e: Extract per-CpG methylation (always blood-only background)
+    print(f"  Step 0e: Extracting per-CpG methylation from beta files (blood-only)")
     target_betas, bg_betas, bg_group_map = _match_beta_files_with_groups(
-        groups_file, groups_csv, beta_dir
+        blood_groups_file, groups_csv, beta_dir
     )
     extract_percpg_methylation_with_indices(
         blocks, cpg_indices, target_betas, bg_betas,
         max_bg_samples=max_bg_samples,
         bg_group_map=bg_group_map,
+        only_hyper=only_hyper,
     )
 
     # Report cleanliness scores
@@ -1163,12 +1280,19 @@ def discover_dmrs(
     print(f"    Cleanliness: {good}/{len(blocks)} blocks score >= 0.6")
 
     # Step 0e2: Per-subgroup background filter
-    # Reject blocks where any background subgroup (e.g. CD8 T cells)
-    # has mean methylation below the threshold. This catches regions
-    # where the average background looks fine but one specific cell type
-    # is partially unmethylated — which would cause false positives in
-    # a real blood sample containing that cell type.
+    # For hypomethylated markers: reject blocks where any background
+    # subgroup has mean methylation BELOW the threshold (partially
+    # unmethylated → false positives in real blood).
+    # For hypermethylated markers: reject blocks where any background
+    # subgroup has mean methylation ABOVE (1 - threshold) (partially
+    # methylated → false positives in real blood).
     if bg_group_map and min_bg_subgroup_meth > 0:
+        if only_hyper:
+            max_bg_subgroup_meth = 1.0 - min_bg_subgroup_meth
+            filter_desc = f"max <= {max_bg_subgroup_meth:.2f}"
+        else:
+            filter_desc = f"min >= {min_bg_subgroup_meth:.2f}"
+
         before = len(blocks)
         filtered = []
         rejected_blocks = []
@@ -1176,22 +1300,33 @@ def discover_dmrs(
             if not b.bg_subgroup_meth:
                 filtered.append(b)
                 continue
-            min_subgroup = min(b.bg_subgroup_meth.values())
-            if min_subgroup >= min_bg_subgroup_meth:
-                filtered.append(b)
+            if only_hyper:
+                max_subgroup = max(b.bg_subgroup_meth.values())
+                if max_subgroup <= (1.0 - min_bg_subgroup_meth):
+                    filtered.append(b)
+                else:
+                    rejected_blocks.append(b)
             else:
-                rejected_blocks.append(b)
+                min_subgroup = min(b.bg_subgroup_meth.values())
+                if min_subgroup >= min_bg_subgroup_meth:
+                    filtered.append(b)
+                else:
+                    rejected_blocks.append(b)
         rejected = len(rejected_blocks)
         if rejected > 0:
-            print(f"  Step 0e2: Per-subgroup filter (min >= {min_bg_subgroup_meth}): "
+            print(f"  Step 0e2: Per-subgroup filter ({filter_desc}): "
                   f"rejected {rejected}/{before} blocks")
-            # Show which subgroups caused rejections
             rejected_subgroups = {}
             for b in rejected_blocks:
-                worst = min(b.bg_subgroup_meth, key=b.bg_subgroup_meth.get)
+                if only_hyper:
+                    worst = max(b.bg_subgroup_meth, key=b.bg_subgroup_meth.get)
+                    reason = "partially methylated"
+                else:
+                    worst = min(b.bg_subgroup_meth, key=b.bg_subgroup_meth.get)
+                    reason = "partially unmethylated"
                 rejected_subgroups[worst] = rejected_subgroups.get(worst, 0) + 1
             for sg, count in sorted(rejected_subgroups.items(), key=lambda x: -x[1]):
-                print(f"    {sg}: {count} blocks rejected (partially unmethylated)")
+                print(f"    {sg}: {count} blocks rejected ({reason})")
         blocks[:] = filtered
         print(f"    {len(blocks)} blocks remain after per-subgroup filter")
 
@@ -1230,11 +1365,15 @@ def main():
                         help='Target mean must be below this (default 0.15)')
     parser.add_argument('--meth-mean-thresh', type=float, default=0.65,
                         help='Background mean must be above this (default 0.65)')
-    parser.add_argument('--min-bg-subgroup-meth', type=float, default=0.50,
-                        help='Reject blocks where any bg subgroup is below this (default 0.50)')
+    parser.add_argument('--min-bg-subgroup-meth', type=float, default=0.70,
+                        help='Reject blocks where any bg subgroup is below this (default 0.70)')
     parser.add_argument('--max-bg-samples', type=int, default=30)
     parser.add_argument('--skip-find-markers', action='store_true',
                         help='Skip find_markers (use existing BED)')
+    parser.add_argument('--use-full-atlas', action='store_true',
+                        help='Use full atlas as find_markers background (hybrid approach)')
+    parser.add_argument('--only-hyper', action='store_true',
+                        help='Find hypermethylated markers (target methylated, bg unmethylated)')
     args = parser.parse_args()
 
     blocks = discover_dmrs(
@@ -1251,6 +1390,8 @@ def main():
         min_bg_subgroup_meth=args.min_bg_subgroup_meth,
         max_bg_samples=args.max_bg_samples,
         skip_find_markers=args.skip_find_markers,
+        use_full_atlas=args.use_full_atlas,
+        only_hyper=args.only_hyper,
     )
 
     print(f"\n=== DMR Discovery complete ===")

@@ -90,7 +90,10 @@ def format_block_row(block: dict, subgroup_names: list = None) -> dict:
     """Extract block-level columns from a block dict.
 
     If subgroup_names is provided, also add per-subgroup methylation columns
-    and summary columns (min subgroup, worst subgroup).
+    and summary columns (min/max subgroup, worst subgroup).
+
+    For hypomethylated markers (direction='U'): worst = least methylated subgroup.
+    For hypermethylated markers (direction='M'): worst = most methylated subgroup.
     """
     row = {}
     for display_name, key in BLOCK_COLUMNS:
@@ -98,13 +101,20 @@ def format_block_row(block: dict, subgroup_names: list = None) -> dict:
 
     if subgroup_names is not None:
         bg_sg = block.get("bg_subgroup_meth", {})
+        is_hyper = block.get("direction", "U") == "M"
         for sg in subgroup_names:
             col_name = f"BG: {sg}"
             row[col_name] = round(bg_sg.get(sg, ""), 4) if sg in bg_sg else ""
         # Summary columns
         if bg_sg:
-            row["Min subgroup methylation"] = round(min(bg_sg.values()), 4)
-            row["Worst background subgroup"] = min(bg_sg, key=bg_sg.get)
+            if is_hyper:
+                # Hyper: worst = most methylated background subgroup
+                row["Max subgroup methylation"] = round(max(bg_sg.values()), 4)
+                row["Worst background subgroup"] = max(bg_sg, key=bg_sg.get)
+            else:
+                # Hypo: worst = least methylated background subgroup
+                row["Min subgroup methylation"] = round(min(bg_sg.values()), 4)
+                row["Worst background subgroup"] = min(bg_sg, key=bg_sg.get)
         else:
             row["Min subgroup methylation"] = ""
             row["Worst background subgroup"] = ""
@@ -203,7 +213,13 @@ def export_excel(json_paths, top_n, output_path):
         block_headers = [name for name, _ in BLOCK_COLUMNS]
         for sg in ct_subgroup_names:
             block_headers.append(f"BG: {sg}")
-        block_headers.append("Min subgroup methylation")
+        # Detect if any blocks are hypermethylated
+        has_hyper = any(b.get("direction", "U") == "M" for b in top_blocks)
+        has_hypo = any(b.get("direction", "U") != "M" for b in top_blocks)
+        if has_hypo:
+            block_headers.append("Min subgroup methylation")
+        if has_hyper:
+            block_headers.append("Max subgroup methylation")
         block_headers.append("Worst background subgroup")
         ws = wb.create_sheet(title=cell_type[:31])  # Excel sheet name max 31 chars
         write_sheet(ws, block_headers, block_rows)
@@ -220,7 +236,9 @@ def export_excel(json_paths, top_n, output_path):
         block_headers = [name for name, _ in BLOCK_COLUMNS]
         for sg in subgroup_names:
             block_headers.append(f"BG: {sg}")
+        # Include both min and max columns (one will be empty per block)
         block_headers.append("Min subgroup methylation")
+        block_headers.append("Max subgroup methylation")
         block_headers.append("Worst background subgroup")
         ws_summary = wb.create_sheet(title="All blocks summary", index=0)
         write_sheet(ws_summary, block_headers, all_block_rows)

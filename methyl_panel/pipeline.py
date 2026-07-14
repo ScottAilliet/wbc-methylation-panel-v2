@@ -65,6 +65,8 @@ def step0_discover_dmrs(args):
         wgbstools_path=args.wgbstools_path,
         max_bg_samples=args.max_bg_samples,
         skip_find_markers=args.skip_find_markers,
+        use_full_atlas=args.use_full_atlas,
+        only_hyper=args.only_hyper,
     )
 
     # Convert DMRBlock objects to the same dict format that step 1 produces
@@ -533,12 +535,19 @@ def main():
                         help="Target mean must be below this (default 0.15)")
     parser.add_argument("--meth-mean-thresh", type=float, default=0.65,
                         help="Background mean must be above this (default 0.65)")
-    parser.add_argument("--min-bg-subgroup-meth", type=float, default=0.50,
-                        help="Reject blocks where any bg subgroup is below this (default 0.50)")
+    parser.add_argument("--min-bg-subgroup-meth", type=float, default=0.70,
+                        help="Reject blocks where any bg subgroup is below this (default 0.70)")
     parser.add_argument("--max-bg-samples", type=int, default=30,
                         help="Max background samples for per-CpG extraction")
     parser.add_argument("--skip-find-markers", action="store_true",
                         help="Skip find_markers (reuse existing BED output)")
+    parser.add_argument("--use-full-atlas", action="store_true",
+                        help="Use full atlas (all 207 samples) as find_markers background "
+                             "to get more candidates, then apply blood-only per-subgroup "
+                             "filter for quality control (hybrid approach)")
+    parser.add_argument("--only-hyper", action="store_true",
+                        help="Find hypermethylated markers (target methylated, background "
+                             "unmethylated) instead of hypomethylated markers")
 
     args = parser.parse_args()
 

@@ -1,6 +1,6 @@
 # WBC Methylation Panel v2 — Operator Handbook
 
-**Version:** Pipeline v2.2.4
+**Version:** Pipeline v2.2.5
 **Repository:** `wbc-methylation-panel-v2`
 **Last updated:** 2026-07-14
 
@@ -11,6 +11,18 @@
 ### What This Handbook Is
 
 This handbook is the complete guide for running the WBC Methylation Panel v2 primer design pipeline on your Mac. It covers installation, data download, running the pipeline, and understanding the output — written for a lab scientist who is not a programmer.
+
+### What Changed in v2.2.5
+
+This version introduces three improvements to DMR marker discovery: a **hybrid atlas approach** for more candidate markers, **hypermethylated marker support**, and a **strict per-subgroup filter** at 0.70.
+
+Key changes:
+
+1. **Hybrid atlas approach (`--use-full-atlas`):** By default, find_markers uses blood-only background (36 samples) to discover DMRs. This is biologically correct but finds fewer candidates for closely related T-cell subtypes (CD4T found only 17 markers, CD8T only 11). The new `--use-full-atlas` flag uses the full 207-sample atlas as find_markers background — this finds more candidate DMRs because the target cell type is more different from liver/brain/colon than from other blood cells. The per-CpG extraction and per-subgroup filter still use blood-only background, so only markers that are also well-separated from every blood cell type survive. The biological logic: markers that distinguish a cell type from all human cell types are a superset of markers that distinguish it from blood cells only — so using the full atlas for discovery and blood-only for quality control gives the best of both worlds.
+
+2. **Hypermethylated markers (`--only-hyper`):** By default, the pipeline discovers **hypomethylated** markers — regions where the target cell type is unmethylated (< 15%) and all other blood cells are methylated (> 65%). The new `--only-hyper` flag discovers the mirror image: regions where the target is methylated and all other blood cells are unmethylated. This doubles the marker search space. The per-subgroup filter is automatically inverted for hyper markers: instead of requiring every background subgroup to be methylated (> 0.70), it requires every background subgroup to be unmethylated (< 0.30). The cleanliness score is also inverted: component A measures how close the target is to 1.0 (instead of 0.0), and component B measures how close the background is to 0.0 (instead of 1.0). The Excel export shows "Max subgroup methylation" instead of "Min subgroup methylation" for hyper markers. The `direction` field in `dmr_blocks.json` is set to `"M"` for hyper and `"U"` for hypo.
+
+3. **Strict per-subgroup filter (0.70, was 0.50):** The `--min-bg-subgroup-meth` default is raised from 0.50 to 0.70. This means every background blood cell type must be at least 70% methylated (for hypo markers) or at most 30% methylated (for hyper markers) at a DMR region. The previous 0.50 threshold allowed markers where a background cell type was only partially methylated — adequate but not ideal for a dPCR assay where binary discrimination matters. The stricter 0.70 threshold ensures the DMR region itself provides strong binary separation, rather than relying on primer design constraints to compensate for marginal discrimination. Discrimination must happen at the DMR region level.
 
 ### What Changed in v2.2.4
 
@@ -30,7 +42,7 @@ This version improves DMR marker quality by adding a **per-subgroup background c
 
 Key changes:
 
-1. **Per-subgroup background check:** After find_markers, the pipeline now computes mean methylation for **each background blood cell type independently** (e.g. B cells, NK cells, CD8 T cells, monocytes, granulocytes). Any DMR block where a single background subgroup has mean methylation below 0.50 is rejected. This catches the key problem with CD4T/CD8T: a region where CD4T is unmethylated (0.01) and the average background looks fine (0.88) but CD8 T cells are only partially methylated (0.55) — which would cause false positives in a real blood sample containing CD8 cells. The threshold can be adjusted with `--min-bg-subgroup-meth`. The default is 0.50 (each background subgroup must be more methylated than not). A stricter threshold of 0.70 can be used for well-separated cell types like MONO/BCELL, but for closely related T-cell subtypes (CD4T/CD8T) 0.50 is more appropriate — CD4 and CD8 T cells share much of their methylation landscape, and requiring all CD8 subgroups to be > 70% methylated at CD4-specific regions leaves almost no markers.
+1. **Per-subgroup background check:** After find_markers, the pipeline now computes mean methylation for **each background blood cell type independently** (e.g. B cells, NK cells, CD8 T cells, monocytes, granulocytes). Any DMR block where a single background subgroup has mean methylation below the threshold is rejected. This catches the key problem with CD4T/CD8T: a region where CD4T is unmethylated (0.01) and the average background looks fine (0.88) but CD8 T cells are only partially methylated (0.55) — which would cause false positives in a real blood sample containing CD8 cells. The threshold can be adjusted with `--min-bg-subgroup-meth`. The default was 0.50 in v2.2.3 and raised to 0.70 in v2.2.5 — every background subgroup must now be at least 70% methylated (for hypo markers) or at most 30% methylated (for hyper markers). This ensures strong binary discrimination at the DMR region level.
 
 2. **T-CD3 excluded from CD4T/CD8T backgrounds:** Blood-T-CD3 is a pan-T cell population containing both CD4+ and CD8+ T cells. It overlaps with the CD4T and CD8T targets, so it is now excluded from their backgrounds (via `BG_EXCLUDE` in `phase0_dmr_discovery.py`). Without this exclusion, the per-subgroup filter rejected 68/73 CD4T markers because T-CD3 was "partially unmethylated" — it contains CD4+ T cells that are unmethylated at CD4-specific regions. With the exclusion, CD4T background is B cells, NK cells, granulocytes, monocytes, and CD8 T cells only.
 
@@ -442,18 +454,20 @@ python -m methyl_panel.pipeline --steps all --discover-dmrs \
 - `--delta-means`: Min methylation difference between target and background (default: 0.3)
 - `--unmeth-mean-thresh`: Target mean methylation must be below this (default: 0.15)
 - `--meth-mean-thresh`: Background mean methylation must be above this (default: 0.65)
-- `--min-bg-subgroup-meth`: Reject blocks where any background blood cell type subgroup has mean methylation below this (default: 0.50). Set to 0 to disable. Use 0.70 for well-separated cell types, 0.50 for closely related T-cell subtypes.
+- `--min-bg-subgroup-meth`: Reject blocks where any background blood cell type subgroup has mean methylation below this (default: 0.70). Set to 0 to disable. For hypo markers, every background subgroup must be ≥ this value. For hyper markers (`--only-hyper`), every background subgroup must be ≤ (1 - this value).
 - `--max-bg-samples`: Max background samples for per-CpG extraction (default: 30)
+- `--use-full-atlas`: Use the full 207-sample atlas as find_markers background instead of blood-only (36 samples). Per-CpG extraction and per-subgroup filter still use blood-only background. Finds more candidate DMRs, especially for CD4T/CD8T.
+- `--only-hyper`: Discover hypermethylated markers (target methylated, background unmethylated) instead of the default hypomethylated markers (target unmethylated, background methylated). The per-subgroup filter and cleanliness score are automatically inverted.
 
 **What Step 0 does:**
-1. Generates a groups CSV file — target samples (your cell type) vs background (other blood cell types only)
+1. Generates two groups CSV files — a blood-only groups file (for per-CpG extraction and per-subgroup filter) and, if `--use-full-atlas` is set, a full-atlas groups file (for find_markers). If `--use-full-atlas` is not set, both are blood-only. Overlapping cell populations (e.g. T-CD3 for CD4T/CD8T) are excluded from the background in both files.
 2. Generates a beta list file — paths to all .beta files
-3. Runs `wgbstools find_markers` — discovers hypomethylated DMRs with quality filters: delta_means ≥ 0.3, target mean < 0.15, background mean > 0.65, min 3 CpGs, top 300. Overlapping cell populations (e.g. T-CD3 for CD4T/CD8T) are excluded from the background.
+3. Runs `wgbstools find_markers` — discovers DMRs with quality filters: delta_means ≥ 0.3, target mean < 0.15 (hypo) or > 0.65 (hyper), background mean > 0.65 (hypo) or < 0.15 (hyper), min 3 CpGs, top 300. Uses `--only_hypo` (default) or `--only_hyper` (with `--only-hyper`).
 4. Parses the output BED file
-5. Extracts per-CpG methylation from beta files for each DMR
-6. Computes cleanliness scores (target near-zero, background near-one, consistency, coverage)
-7. Computes per-subgroup background methylation — verifies that EACH background blood cell type (B, NK, granulocytes, monocytes, CD8 T cells, etc.) is sufficiently methylated (> 0.50). Rejects blocks where any single subgroup is partially unmethylated, even if the average background looks fine.
-8. Saves `dmr_blocks.json` — same format as Step 1, so steps 2–9 work unchanged
+5. Extracts per-CpG methylation from beta files for each DMR (always using blood-only background)
+6. Computes cleanliness scores — for hypo markers: target near-zero, background near-one; for hyper markers: target near-one, background near-zero. Both include consistency and coverage components.
+7. Computes per-subgroup background methylation — for hypo markers, verifies that EACH background blood cell type is sufficiently methylated (≥ 0.70); for hyper markers, verifies each is sufficiently unmethylated (≤ 0.30). Rejects blocks where any single subgroup fails.
+8. Saves `dmr_blocks.json` — same format as Step 1, with a `direction` field (`"U"` for hypo, `"M"` for hyper), so steps 2–9 work unchanged
 
 **Why delta values are lower with blood-only background:** The background is restricted to other blood cell types (36 samples), not the full 207-sample atlas. Blood cells are more epigenetically similar to each other than to non-blood tissues. MONO vs T cells gives delta ~0.88, while MONO vs liver gives delta ~0.95. CD4T vs CD8T gives delta ~0.85 because CD4 and CD8 T cells are closely related lineages. **This is correct for a WBC assay** — the deltas that matter are against cells that will be in the same tube. The per-subgroup filter ensures that even the most similar background cell type is sufficiently methylated.
 
@@ -540,16 +554,30 @@ When using `--discover-dmrs`, the pipeline automatically merges these atlas grou
 To run all 7 immune cell types with DMR discovery:
 
 ```bash
+# Hypomethylated markers with hybrid atlas approach (recommended)
 for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
     python -m methyl_panel.pipeline --steps all --discover-dmrs \
         --cell-type $CT \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
+        --use-full-atlas \
         --output-dir results/$CT/
 done
 ```
 
-Each cell type's results are saved in its own subdirectory (`results/MONO/`, `results/BCELL/`, etc.). The find_markers step runs once per cell type (~1 min each), and per-CpG extraction takes ~4 min per cell type. Total runtime: ~35 minutes for all 7.
+```bash
+# Hypermethylated markers (target methylated, background unmethylated)
+for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
+    python -m methyl_panel.pipeline --steps all --discover-dmrs \
+        --cell-type $CT \
+        --genome data/hg19/hg19.fa.gz \
+        --min-tm 58 --opt-tm 60 --max-tm 62 \
+        --use-full-atlas --only-hyper \
+        --output-dir results_hyper/$CT/
+done
+```
+
+Each cell type's results are saved in its own subdirectory (`results/MONO/`, `results/BCELL/`, etc. for hypo; `results_hyper/MONO/`, etc. for hyper). The find_markers step runs once per cell type (~1 min each), and per-CpG extraction takes ~4 min per cell type. Total runtime: ~35 minutes for all 7 (hypo), plus another ~35 minutes for hyper if you run both.
 
 ### 3.7 Choosing Tm Values
 
@@ -1124,13 +1152,26 @@ python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
 ```
 
 ```bash
-# All 7 immune cell types
+# All 7 immune cell types — hypomethylated markers with hybrid atlas approach
 for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
     python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
         --discover-dmrs --cell-type $CT \
         --genome data/hg19/hg19.fa.gz \
         --min-tm 58 --opt-tm 60 --max-tm 62 \
+        --use-full-atlas \
         --output-dir results/$CT/
+done
+```
+
+```bash
+# Hypermethylated markers (target methylated, background unmethylated)
+for CT in MONO BCELL NK GRAN CD3T CD8T CD4T; do
+    python -m methyl_panel.pipeline --steps 0,2,3,5,7,8,9 \
+        --discover-dmrs --cell-type $CT \
+        --genome data/hg19/hg19.fa.gz \
+        --min-tm 58 --opt-tm 60 --max-tm 62 \
+        --use-full-atlas --only-hyper \
+        --output-dir results_hyper/$CT/
 done
 ```
 
@@ -1142,6 +1183,14 @@ open results/MONO/primer_assays.pdf
 ---
 
 ## Appendix C — Change Log
+
+### v2.2.5 (2026-07-14)
+
+- `phase0_dmr_discovery.py`: Added hybrid atlas approach. New `generate_groups_file_full_atlas()` creates a groups file with all 207 atlas samples as background (minus BG_EXCLUDE groups). `discover_dmrs()` now generates two groups files: a blood-only file for per-CpG extraction and per-subgroup filter, and a full-atlas file for find_markers. Activated by `use_full_atlas=True` parameter and `--use-full-atlas` CLI flag. Finds more candidate DMRs for closely related T-cell subtypes (CD4T, CD8T) while maintaining blood-only quality control.
+- `phase0_dmr_discovery.py`: Added hypermethylated marker support. `run_find_markers()` now accepts `only_hyper=True` which passes `--only_hyper` to wgbstools find_markers (swaps target/background internally). The per-subgroup filter is inverted for hyper markers: rejects if any subgroup > (1 - min_bg_subgroup_meth) instead of < min_bg_subgroup_meth. `_cleanliness_score()` updated with `only_hyper` parameter: component A = min(target mean) for hyper (target near 1), B = 1 - max(background mean) for hyper (background near 0). `direction` field ("M" for hyper, "U" for hypo) added to DMRBlock and JSON output. Activated by `--only-hyper` CLI flag.
+- `phase0_dmr_discovery.py`, `pipeline.py`: Raised `--min-bg-subgroup-meth` default from 0.50 to 0.70. Every background blood cell type must now be at least 70% methylated (hypo) or at most 30% methylated (hyper) at a DMR region. Ensures strong binary discrimination at the DMR region level rather than relying on primer design to compensate for marginal separation.
+- `export_dmr_excel.py`: Updated for hypermethylated markers. `format_block_row()` detects hyper from `direction` field and shows "Max subgroup methylation" column instead of "Min subgroup methylation". The "Worst background subgroup" column shows the subgroup with the highest methylation for hyper markers (instead of lowest for hypo). Summary sheet includes both Min and Max columns.
+- `pipeline.py`: Added `--use-full-atlas` and `--only-hyper` CLI arguments, passed through to `discover_dmrs()`.
 
 ### v2.2.4 (2026-07-14)
 
