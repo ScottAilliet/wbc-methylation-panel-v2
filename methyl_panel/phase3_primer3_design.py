@@ -93,15 +93,26 @@ class PrimerPair:
     mapping_error_note: Optional[str] = None
 
 
-def count_cpgs_in_primer(primer_seq: str) -> Tuple[int, int]:
+def count_cpgs_in_primer(primer_seq: str, template_name: str = "") -> Tuple[int, int]:
     """
-    Count CpGs in a primer sequence.
+    Count CpG positions in a bisulfite-converted primer sequence.
+
+    In bisulfite-converted templates:
+    - Methylated (SM/AM): CpG sites appear as CG
+    - Unmethylated (SU/AU): CpG sites appear as TG (C→T conversion)
+
+    This function counts both CG and TG dinucleotides as CpG positions,
+    depending on which template the primer was designed from.
+
     Returns (total_cpg, tail_cpg) where tail_cpg = CpGs in last 5 nucleotides.
     """
     seq = primer_seq.upper()
     total = 0
     for i in range(len(seq) - 1):
-        if seq[i] == 'C' and seq[i + 1] == 'G':
+        # CG = CpG in methylated template (SM/AM)
+        # TG = CpG in unmethylated template (SU/AU) — original C was converted to T
+        if (seq[i] == 'C' and seq[i + 1] == 'G') or \
+           (seq[i] == 'T' and seq[i + 1] == 'G'):
             total += 1
 
     # Count CpGs in the 3' tail (last 5 nucleotides)
@@ -109,7 +120,8 @@ def count_cpgs_in_primer(primer_seq: str) -> Tuple[int, int]:
     tail = seq[tail_start:]
     tail_cpg = 0
     for i in range(len(tail) - 1):
-        if tail[i] == 'C' and tail[i + 1] == 'G':
+        if (tail[i] == 'C' and tail[i + 1] == 'G') or \
+           (tail[i] == 'T' and tail[i + 1] == 'G'):
             tail_cpg += 1
 
     return total, tail_cpg
@@ -188,9 +200,9 @@ def design_primers_for_block(genomic_seq: str, config: Primer3PlusConfig,
             if not left_seq or not right_seq:
                 continue
 
-            # Count CpGs
-            left_cpg, left_cpg_tail = count_cpgs_in_primer(left_seq)
-            right_cpg, right_cpg_tail = count_cpgs_in_primer(right_seq)
+            # Count CpGs (pass template name for correct CG/TG counting)
+            left_cpg, left_cpg_tail = count_cpgs_in_primer(left_seq, template_name)
+            right_cpg, right_cpg_tail = count_cpgs_in_primer(right_seq, template_name)
 
             # Skip if not enough CpGs (bisulfite-specific constraint)
             if (left_cpg + right_cpg) < pipeline_config.min_cpg_pair_total:
@@ -239,8 +251,10 @@ def design_primers_for_block(genomic_seq: str, config: Primer3PlusConfig,
             amp_start = left_start
             amp_end = right_start + right_len
             amp_seq = template_seq[amp_start:amp_end]
+            # Count CpG positions in amplicon: CG (methylated) or TG (unmethylated)
             amp_cpgs = sum(1 for j in range(len(amp_seq) - 1)
-                          if amp_seq[j] == 'C' and amp_seq[j+1] == 'G')
+                          if (amp_seq[j] == 'C' and amp_seq[j+1] == 'G') or
+                             (amp_seq[j] == 'T' and amp_seq[j+1] == 'G'))
 
             primer_pair = PrimerPair(
                 assay_id=assay_id,
