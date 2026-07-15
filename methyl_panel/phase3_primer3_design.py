@@ -93,36 +93,57 @@ class PrimerPair:
     mapping_error_note: Optional[str] = None
 
 
-def count_cpgs_in_primer(primer_seq: str, template_name: str = "") -> Tuple[int, int]:
+def count_cpgs_by_position(cpg_positions: List[int], template_len: int,
+                            template_name: str,
+                            start: int, length: int) -> Tuple[int, int]:
     """
-    Count CpG positions in a bisulfite-converted primer sequence.
+    Count CpG sites in a primer region using known genomic CpG positions.
 
-    In bisulfite-converted templates:
-    - Methylated (SM/AM): CpG sites appear as CG
-    - Unmethylated (SU/AU): CpG sites appear as TG (C→T conversion)
+    Bisulfite conversion is a substitution (C→T), not an indel, so CpG positions
+    are identical between the genomic sequence and all bisulfite-converted
+    templates. We use the known CpG positions from the genomic sequence rather
+    than scanning the converted primer sequence, because:
 
-    This function counts both CG and TG dinucleotides as CpG positions,
-    depending on which template the primer was designed from.
+    - In unmethylated templates (SU/AU), CpG C's become T's, so scanning for
+      'CG' misses them. Scanning for 'TG' instead is wrong because non-CpG C's
+      also become T's, creating many false 'TG' dinucleotides.
+    - Position-based counting is template-independent and always correct.
 
-    Returns (total_cpg, tail_cpg) where tail_cpg = CpGs in last 5 nucleotides.
+    For sense strands (SM/SU), cpg_positions are top-strand 0-based positions
+    and map directly to template coordinates.
+
+    For antisense strands (AM/AU), the bottom strand is the reverse complement,
+    so a top-strand CpG at position p maps to bottom-strand position len-p-2.
+
+    Args:
+        cpg_positions: 0-based positions of CpG C's on the top (sense) strand
+        template_len: Length of the template sequence
+        template_name: "SM", "AM", "SU", or "AU"
+        start: 0-based start position of the primer in the template
+        length: Length of the primer
+
+    Returns:
+        (total_cpg, tail_cpg) where tail_cpg = CpGs in last 5 nucleotides
     """
-    seq = primer_seq.upper()
-    total = 0
-    for i in range(len(seq) - 1):
-        # CG = CpG in methylated template (SM/AM)
-        # TG = CpG in unmethylated template (SU/AU) — original C was converted to T
-        if (seq[i] == 'C' and seq[i + 1] == 'G') or \
-           (seq[i] == 'T' and seq[i + 1] == 'G'):
-            total += 1
+    # Convert top-strand CpG positions to this template's coordinate system
+    if template_name in ("SM", "SU"):
+        # Sense strand: positions map directly
+        positions = cpg_positions
+    else:
+        # Antisense strand: reverse-complement mapping
+        # A top-strand CpG at position p has its C at p and G at p+1.
+        # On the bottom strand (reverse complement), the G becomes the
+        # first base and the C becomes the second, at position len-p-2.
+        positions = [template_len - p - 2 for p in cpg_positions]
+
+    end = start + length  # exclusive
+
+    # Count CpGs in the full primer region
+    total = sum(1 for pos in positions if start <= pos < end)
 
     # Count CpGs in the 3' tail (last 5 nucleotides)
-    tail_start = max(0, len(seq) - 5)
-    tail = seq[tail_start:]
-    tail_cpg = 0
-    for i in range(len(tail) - 1):
-        if (tail[i] == 'C' and tail[i + 1] == 'G') or \
-           (tail[i] == 'T' and tail[i + 1] == 'G'):
-            tail_cpg += 1
+    tail_start = max(start, end - 5)
+    tail_cpg = sum(1 for pos in positions if tail_start <= pos < end)
 
     return total, tail_cpg
 
@@ -200,9 +221,14 @@ def design_primers_for_block(genomic_seq: str, config: Primer3PlusConfig,
             if not left_seq or not right_seq:
                 continue
 
-            # Count CpGs (pass template name for correct CG/TG counting)
-            left_cpg, left_cpg_tail = count_cpgs_in_primer(left_seq, template_name)
-            right_cpg, right_cpg_tail = count_cpgs_in_primer(right_seq, template_name)
+            # Count CpGs using known genomic positions (template-independent)
+            template_len = len(template_seq)
+            left_cpg, left_cpg_tail = count_cpgs_by_position(
+                strands.cpg_positions, template_len, template_name,
+                left_start, left_len)
+            right_cpg, right_cpg_tail = count_cpgs_by_position(
+                strands.cpg_positions, template_len, template_name,
+                right_start, right_len)
 
             # Skip if not enough CpGs (bisulfite-specific constraint)
             if (left_cpg + right_cpg) < pipeline_config.min_cpg_pair_total:
@@ -247,14 +273,15 @@ def design_primers_for_block(genomic_seq: str, config: Primer3PlusConfig,
             left_display = format_primer_display(left_seq)
             right_display = format_primer_display(right_seq)
 
-            # Count total CpGs in amplicon
+            # Count total CpGs in amplicon using known genomic positions
             amp_start = left_start
             amp_end = right_start + right_len
-            amp_seq = template_seq[amp_start:amp_end]
-            # Count CpG positions in amplicon: CG (methylated) or TG (unmethylated)
-            amp_cpgs = sum(1 for j in range(len(amp_seq) - 1)
-                          if (amp_seq[j] == 'C' and amp_seq[j+1] == 'G') or
-                             (amp_seq[j] == 'T' and amp_seq[j+1] == 'G'))
+            # Convert top-strand CpG positions to this template's coordinate system
+            if template_name in ("SM", "SU"):
+                amp_positions = strands.cpg_positions
+            else:
+                amp_positions = [template_len - p - 2 for p in strands.cpg_positions]
+            amp_cpgs = sum(1 for pos in amp_positions if amp_start <= pos < amp_end)
 
             primer_pair = PrimerPair(
                 assay_id=assay_id,

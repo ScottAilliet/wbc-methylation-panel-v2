@@ -244,6 +244,8 @@ def step3_design_primers(args, converted_data=None):
 
     config.validate_tm()
     pipeline_config = PipelineConfig()
+    pipeline_config.min_cpg_pair_total = args.min_cpg_pair_total
+    pipeline_config.min_cpg_per_primer = args.min_cpg_per_primer
 
     all_primers = []
     for i, block in enumerate(converted_data):
@@ -523,6 +525,12 @@ def main():
                         help="Minimum product size in bp (default 60)")
     parser.add_argument("--product-size-max", type=int, default=150,
                         help="Maximum product size in bp (default 150)")
+    parser.add_argument("--min-cpg-pair-total", type=int, default=4,
+                        help="Min total CpGs across both primers (default 4). "
+                             "Lower to 3 for sparse-CpG DMRs.")
+    parser.add_argument("--min-cpg-per-primer", type=int, default=2,
+                        help="Min CpGs in at least one primer (default 2). "
+                             "Lower to 1 for sparse-CpG DMRs.")
     parser.add_argument("--flank", type=int, default=100, help="Flanking bp around DMR")
     parser.add_argument("--max-blocks", type=int, help="Max blocks to process (for testing)")
     parser.add_argument("--bowtie-index-dir", help="Directory with bowtie2 indices")
