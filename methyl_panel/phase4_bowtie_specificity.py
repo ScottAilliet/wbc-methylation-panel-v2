@@ -111,17 +111,18 @@ def create_bowtie_index(genome_fasta: str, output_dir: str,
 
 
 def align_primer_bowtie2(primer_seq: str, index_prefix: str,
-                         max_mismatches: int = 4) -> List[dict]:
+                         max_mismatches: int = 3) -> List[dict]:
     """
     Align a primer against a bowtie2 index.
 
     Args:
         primer_seq: Primer sequence
         index_prefix: Path to bowtie2 index prefix
-        max_mismatches: Maximum allowed mismatches in seed
+        max_mismatches: Maximum allowed mismatches (edits) in alignment
 
     Returns:
-        List of alignment dictionaries
+        List of alignment dictionaries with parsed SAM fields.
+        Returns empty list if bowtie2 fails or finds no hits.
     """
     # Create a FASTA file for the primer
     with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as tmp:
@@ -129,49 +130,79 @@ def align_primer_bowtie2(primer_seq: str, index_prefix: str,
         tmp_path = tmp.name
 
     try:
-        # Run bowtie2 in end-to-end mode with relaxed settings
+        # Bowtie2 settings for short primer screening:
+        # --end-to-end: require full-length alignment (no soft clipping)
+        # -N 1: allow 1 mismatch in seed (bowtie2 max is 1, NOT 2)
+        # -L 10: seed length (short for 18-23bp primers)
+        # -a: report all alignments
+        # --score-min L,-6,-6: allow up to ~3 mismatches for 20bp primers
         cmd = [
             "bowtie2",
             "-x", index_prefix,
-            "-f", tmp_path,  # Input is FASTA
+            "-f", tmp_path,
             "--end-to-end",
-            "-N", str(max(0, max_mismatches - 2)),  # Seed mismatches
-            "-L", "10",  # Seed length (shorter for short primers)
-            "-a",  # Report all alignments
-            "--no-hd",  # No header lines
-            "--no-unal",  # Don't print unaligned reads
+            "-N", "1",               # Max 1 seed mismatch (bowtie2 limit)
+            "-L", "10",              # Short seed for short primers
+            "-a",                    # Report all alignments
+            "--no-hd",               # No header lines
+            "--no-unal",             # Don't print unaligned reads
+            "--score-min", "L,-6,-6",  # Allow up to ~3 mismatches
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        # If bowtie2 failed, return empty (caller should check for this)
+        if result.returncode != 0:
+            return []
 
         alignments = []
         for line in result.stdout.strip().split("\n"):
             if not line or line.startswith("@"):
                 continue
             parts = line.split("\t")
-            if len(parts) >= 11:
-                alignments.append({
-                    "read": parts[0],
-                    "flag": int(parts[1]),
-                    "rname": parts[2],
-                    "pos": int(parts[3]),
-                    "mapq": int(parts[4]),
-                    "cigar": parts[5],
-                    "seq": parts[9],
-                    "edits": int(parts[11].split(":")[-1]) if len(parts) > 11 else 0,
-                })
+            if len(parts) < 11:
+                continue
+
+            # Parse optional fields (SAM tags) properly
+            nm = 0
+            as_score = 0
+            for tag in parts[11:]:
+                if tag.startswith("NM:i:"):
+                    nm = int(tag.split(":")[2])
+                elif tag.startswith("AS:i:"):
+                    as_score = int(tag.split(":")[2])
+
+            alignments.append({
+                "read": parts[0],
+                "flag": int(parts[1]),
+                "rname": parts[2],
+                "pos": int(parts[3]),
+                "mapq": int(parts[4]),
+                "cigar": parts[5],
+                "seq": parts[9],
+                "edits": nm,           # NM = number of mismatches
+                "as_score": as_score,  # Alignment score
+            })
 
         return alignments
+    except (subprocess.TimeoutExpired, Exception):
+        return []
     finally:
-        os.unlink(tmp_path)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def screen_primer_pair(left_primer: str, right_primer: str,
                        intended_state: str,
                        index_dir: str,
-                       max_mismatches: int = 4) -> BowtieResult:
+                       max_mismatches: int = 3) -> BowtieResult:
     """
-    Screen a primer pair against all 6 genome states.
+    Screen a primer pair against all genome states.
+
+    A primer pair PASSES if:
+    1. Both primers map to the intended genome (at least 1 hit each)
+    2. No off-target alignments to non-intended genome states
+    3. No multi-mapping within the intended genome (each primer maps uniquely)
 
     Args:
         left_primer: Left primer sequence
@@ -179,15 +210,12 @@ def screen_primer_pair(left_primer: str, right_primer: str,
         intended_state: Which state the primers were designed for
                         (SM, AM, SU, AU, S, A)
         index_dir: Directory containing bowtie2 indices
-        max_mismatches: Maximum mismatches allowed
+        max_mismatches: Maximum mismatches (edits) allowed for a hit to count
 
     Returns:
         BowtieResult with pass/fail and details
     """
     # Map intended state to genome index
-    # SM, AM → converted_methylated
-    # SU, AU → converted_unmethylated
-    # S, A → unconverted
     state_to_index = {
         "SM": "converted_methylated",
         "AM": "converted_methylated",
@@ -198,13 +226,14 @@ def screen_primer_pair(left_primer: str, right_primer: str,
     }
 
     intended_index = state_to_index.get(intended_state, "unconverted")
-
-    # Check all indices
     indices_to_check = ["unconverted", "converted_unmethylated", "converted_methylated"]
 
     total_alignments = 0
     off_target = 0
+    intended_hits = {"left": 0, "right": 0}
+    multi_map = {"left": 0, "right": 0}
     notes = []
+    bowtie_failed = False
 
     for idx_name in indices_to_check:
         idx_path = os.path.join(index_dir, idx_name)
@@ -212,21 +241,49 @@ def screen_primer_pair(left_primer: str, right_primer: str,
             notes.append(f"Index {idx_name} not found, skipping")
             continue
 
-        # Align both primers
         for primer_name, primer_seq in [("left", left_primer), ("right", right_primer)]:
             alignments = align_primer_bowtie2(primer_seq, idx_path, max_mismatches)
 
             # Filter: only count alignments with few edits
             good_alignments = [a for a in alignments if a["edits"] <= max_mismatches]
-
             total_alignments += len(good_alignments)
 
-            if idx_name != intended_index and good_alignments:
+            if idx_name == intended_index:
+                intended_hits[primer_name] = len(good_alignments)
+                if len(good_alignments) > 1:
+                    multi_map[primer_name] = len(good_alignments)
+            elif good_alignments:
                 off_target += len(good_alignments)
                 notes.append(f"{primer_name} primer has {len(good_alignments)} off-target hits in {idx_name}")
 
-    # Pass if no off-target alignments
-    passes = off_target == 0
+    # Check for bowtie2 failure (no hits anywhere = likely bowtie2 error)
+    if total_alignments == 0:
+        notes.append("WARNING: No alignments found in any genome — possible bowtie2 error")
+        bowtie_failed = True
+
+    # Check that both primers mapped to intended genome
+    if intended_hits["left"] == 0:
+        notes.append("Left primer did not map to intended genome")
+    if intended_hits["right"] == 0:
+        notes.append("Right primer did not map to intended genome")
+
+    # Check for multi-mapping within intended genome
+    if multi_map["left"]:
+        notes.append(f"Left primer maps to {multi_map['left']} locations in intended genome")
+    if multi_map["right"]:
+        notes.append(f"Right primer maps to {multi_map['right']} locations in intended genome")
+
+    # Pass criteria:
+    # 1. No off-target alignments
+    # 2. Both primers map to intended genome
+    # 3. No multi-mapping (each primer maps uniquely in intended genome)
+    # 4. Bowtie2 didn't fail
+    passes = (off_target == 0
+              and intended_hits["left"] >= 1
+              and intended_hits["right"] >= 1
+              and multi_map["left"] <= 1
+              and multi_map["right"] <= 1
+              and not bowtie_failed)
 
     note = "; ".join(notes) if notes else "Unique mapping to intended genome"
 

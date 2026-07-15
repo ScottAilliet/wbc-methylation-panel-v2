@@ -269,9 +269,13 @@ def design_primers_for_block(genomic_seq: str, config: Primer3PlusConfig,
                     am_mismatch = calculate_mismatch_score(left_seq, am, left_start)
                     au_mismatch = 0
 
-            # Create display sequences with CpG notation
-            left_display = format_primer_display(left_seq)
-            right_display = format_primer_display(right_seq)
+            # Create display sequences with CpG notation (position-based)
+            left_display = format_primer_display_by_position(
+                left_seq, strands.cpg_positions, template_len,
+                template_name, left_start, left_len)
+            right_display = format_primer_display_by_position(
+                right_seq, strands.cpg_positions, template_len,
+                template_name, right_start, right_len)
 
             # Count total CpGs in amplicon using known genomic positions
             amp_start = left_start
@@ -328,7 +332,12 @@ def design_primers_for_block(genomic_seq: str, config: Primer3PlusConfig,
 
 
 def format_primer_display(seq: str) -> str:
-    """Format primer sequence with CpG notation (lowercase y for C in CpG)."""
+    """Format primer sequence with CpG notation (lowercase y for C in CpG).
+
+    .. deprecated:: Uses sequence-based CG scanning which misses CpG sites in
+       unmethylated templates (where CpG C→T). Use format_primer_display_by_position
+       instead, which uses known genomic CpG positions.
+    """
     result = []
     seq_upper = seq.upper()
     for i, base in enumerate(seq_upper):
@@ -338,6 +347,56 @@ def format_primer_display(seq: str) -> str:
             result.append('g')  # CpG G (already shown by preceding y)
         else:
             result.append(base)
+    return ''.join(result)
+
+
+def format_primer_display_by_position(seq: str, cpg_positions: List[int],
+                                       template_len: int, template_name: str,
+                                       start: int, length: int) -> str:
+    """Format primer sequence with CpG notation using known genomic positions.
+
+    Marks CpG C's as 'y' and CpG G's as 'g' (lowercase) to indicate
+    methylation-discriminatory positions. Works correctly for ALL templates
+    (SM, AM, SU, AU) because it uses genomic CpG positions, not sequence scanning.
+
+    For sense strands (SM/SU), cpg_positions map directly to template coordinates.
+    For antisense strands (AM/AU), positions are converted via len-p-2.
+
+    At each CpG position:
+    - The C (position p) is marked as 'y'
+    - The G (position p+1) is marked as 'g'
+    In unmethylated templates, the C has been converted to T, so the display
+    shows 'y' at that position even though the actual base is T — this indicates
+    "this is a CpG position where methylation discrimination occurs."
+    """
+    # Convert top-strand CpG positions to this template's coordinate system
+    if template_name in ("SM", "SU"):
+        positions = cpg_positions
+    else:
+        positions = [template_len - p - 2 for p in cpg_positions]
+
+    # Build a set of CpG C positions and CpG G positions within this primer
+    end = start + length
+    cpg_c_positions = set()  # Position of the C in CpG
+    cpg_g_positions = set()  # Position of the G in CpG (C+1)
+
+    for pos in positions:
+        if start <= pos < end:
+            cpg_c_positions.add(pos)
+            if pos + 1 < end:
+                cpg_g_positions.add(pos + 1)
+
+    # Build display string
+    result = []
+    seq_upper = seq.upper()
+    for i in range(length):
+        abs_pos = start + i
+        if abs_pos in cpg_c_positions:
+            result.append('y')  # CpG C (or T in unmethylated templates)
+        elif abs_pos in cpg_g_positions:
+            result.append('g')  # CpG G
+        else:
+            result.append(seq_upper[i])
     return ''.join(result)
 
 
