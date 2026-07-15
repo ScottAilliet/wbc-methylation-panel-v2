@@ -2,7 +2,7 @@
 """
 Phase 1: Load DMR blocks and per-CpG data from the Excel output.
 
-Supports two Excel formats:
+Supports three Excel formats:
 
 1. **WBC Panel v7.9 format** (one sheet per cell type):
    Sheets named CD4T, CD8T, B, NK, Mono, Gran, Blood-T-CD3.
@@ -14,6 +14,11 @@ Supports two Excel formats:
 2. **Block_Summary format** (original v2 design):
    A Block_Summary sheet with cell_type_id, seq_id, Chr, Start, End, ...
    plus PerCpG_{cell_type_id} sheets with per-CpG data.
+
+3. **v2.2.8 format** (pipeline output from discover_dmrs):
+   An "All blocks summary" sheet plus per-cell-type sheets named
+   {CELL_TYPE}_hypo (e.g. BCELL_hypo, CD4T_hypo) and a "Per-CpG detail"
+   sheet with per-CpG positions, global indices, and methylation values.
 
 The loader auto-detects which format is present.
 """
@@ -97,11 +102,14 @@ class DMRBlock:
 # Format detection
 # ---------------------------------------------------------------------------
 def _detect_format(xlsx_path: str) -> str:
-    """Detect whether the Excel file is v7.9 or Block_Summary format."""
+    """Detect whether the Excel file is v7.9, Block_Summary, or v2.2.8 format."""
     xl = pd.ExcelFile(xlsx_path)
     sheet_names = set(xl.sheet_names)
     if "Block_Summary" in sheet_names:
         return "block_summary"
+    # v2.2.8 format: "All blocks summary" + per-cell-type _hypo/_hyper sheets
+    if "All blocks summary" in sheet_names:
+        return "v228"
     # Check if any sheet matches v7.9 cell type names
     v79_sheets = set(SHEET_TO_CTID.keys()) | {"CD4T", "CD8T"}
     if sheet_names & v79_sheets:
@@ -225,6 +233,138 @@ def _load_v79(xlsx_path: str, cell_type_id: Optional[str] = None) -> List[DMRBlo
 
 
 # ---------------------------------------------------------------------------
+# v2.2.8 format loader (pipeline output from discover_dmrs)
+# ---------------------------------------------------------------------------
+# Sheet naming: "All blocks summary", "{CELL_TYPE}_hypo", "{CELL_TYPE}_hyper",
+#               "Per-CpG detail"
+# Column mapping (v2.2.8 → DMRBlock):
+#   Cell type              → cell_type_id
+#   Seq ID                 → seq_id
+#   Rank                   → rank
+#   Chromosome             → chrom
+#   Start                  → start
+#   End                    → end
+#   # CpGs                 → num_cpgs
+#   Block length (bp)      → block_len
+#   Gene                   → gene
+#   Annotation             → annotation
+#   Direction              → direction
+#   Target mean methylation→ target_mean_meth
+#   Background mean meth.  → background_mean_meth
+#   Delta means            → delta_means
+#   Cleanliness score      → cleanliness_score
+#   Min subgroup meth.     → (used for bg_subgroup_meth if present)
+#   Worst background subgroup → (used for bg_subgroup_meth if present)
+#   BG: Blood-*            → bg_subgroup_meth dict
+
+# v2.2.8 cell type sheet suffixes
+_V228_DIRECTIONS = ["hypo", "hyper"]
+
+
+def _load_v228(xlsx_path: str, cell_type_id: Optional[str] = None) -> List[DMRBlock]:
+    """Load DMR blocks from a v2.2.8-format Excel file.
+
+    Reads block coordinates from per-cell-type sheets ({CT}_hypo/{CT}_hyper)
+    and per-CpG data from the 'Per-CpG detail' sheet.
+    """
+    xl = pd.ExcelFile(xlsx_path)
+
+    # Determine which sheets to read
+    if cell_type_id:
+        sheets_to_read = [
+            f"{cell_type_id}_{d}" for d in _V228_DIRECTIONS
+            if f"{cell_type_id}_{d}" in xl.sheet_names
+        ]
+        if not sheets_to_read:
+            raise ValueError(
+                f"Cell type '{cell_type_id}' not found in v2.2.8 Excel. "
+                f"Available sheets: {[s for s in xl.sheet_names if s not in ('All blocks summary', 'Per-CpG detail')]}"
+            )
+    else:
+        # Read all cell-type sheets (skip summary and per-CpG detail)
+        sheets_to_read = [
+            s for s in xl.sheet_names
+            if s not in ("All blocks summary", "Per-CpG detail")
+        ]
+
+    # Load per-CpG detail sheet (shared across all cell types)
+    percpg_df = None
+    if "Per-CpG detail" in xl.sheet_names:
+        percpg_df = pd.read_excel(xlsx_path, sheet_name="Per-CpG detail")
+
+    blocks = []
+    for sheet_name in sheets_to_read:
+        df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
+        if df.empty:
+            continue
+
+        for _, row in df.iterrows():
+            ct_id = str(row.get("Cell type", ""))
+            seq_id = str(row.get("Seq ID", ""))
+            if not seq_id or seq_id == "nan":
+                continue
+
+            # Parse background subgroup methylation from BG: columns
+            bg_subgroup_meth = {}
+            for col in df.columns:
+                if col.startswith("BG: "):
+                    subgroup = col[4:]  # Remove "BG: " prefix
+                    val = row.get(col)
+                    if pd.notna(val):
+                        bg_subgroup_meth[subgroup] = float(val)
+
+            block = DMRBlock(
+                cell_type_id=ct_id,
+                seq_id=seq_id,
+                rank=int(row.get("Rank", 0) or 0),
+                chrom=str(row.get("Chromosome", "")),
+                start=int(row.get("Start", 0)),
+                end=int(row.get("End", 0)),
+                num_cpgs=int(row.get("# CpGs", 0) or 0),
+                block_len=int(row.get("Block length (bp)", 0) or 0),
+                gene=str(row.get("Gene", "") or ""),
+                annotation=str(row.get("Annotation", "") or ""),
+                direction=str(row.get("Direction", "") or ""),
+                target_mean_meth=float(row.get("Target mean methylation", 0) or 0),
+                background_mean_meth=float(row.get("Background mean methylation", 0) or 0),
+                delta_means=float(row.get("Delta means", 0) or 0),
+                delta_quants=0.0,
+                delta_maxmin=0.0,
+                ttest_pval="",
+                mwtest_pval="",
+                mvalue_ttest="",
+                cleanliness_score=float(row.get("Cleanliness score", 0) or 0),
+                target_celltype=ct_id,
+                bg_subgroup_meth=bg_subgroup_meth,
+            )
+            blocks.append(block)
+
+    # Attach per-CpG data from the Per-CpG detail sheet
+    if percpg_df is not None and not percpg_df.empty:
+        # Index by seq_id for fast lookup
+        percpg_by_seq = {}
+        for _, crow in percpg_df.iterrows():
+            sid = str(crow.get("Seq ID", ""))
+            if sid and sid != "nan":
+                percpg_by_seq.setdefault(sid, []).append(crow)
+
+        for block in blocks:
+            rows = percpg_by_seq.get(block.seq_id, [])
+            for crow in rows:
+                cpg = CpGSite(
+                    label=str(crow.get("CpG label", "")),
+                    position=int(crow.get("CpG position", 0)),
+                    global_idx=int(crow.get("CpG index", 0)),
+                    target_mean_beta=float(crow.get("Target mean beta", 0) or 0),
+                    background_mean_beta=float(crow.get("Background mean beta", 0) or 0),
+                    delta_beta=float(crow.get("Delta beta", 0) or 0),
+                )
+                block.cpg_sites.append(cpg)
+
+    return blocks
+
+
+# ---------------------------------------------------------------------------
 # Block_Summary format loader (original v2 design)
 # ---------------------------------------------------------------------------
 def _load_block_summary(xlsx_path: str, cell_type_id: Optional[str] = None) -> List[DMRBlock]:
@@ -304,7 +444,7 @@ def load_dmr_blocks(xlsx_path: str, cell_type_id: Optional[str] = None) -> List[
     """
     Load DMR blocks from an Excel file.
 
-    Auto-detects the format (v7.9 or Block_Summary).
+    Auto-detects the format (v7.9, Block_Summary, or v2.2.8).
 
     Args:
         xlsx_path: Path to the DMR Excel file
@@ -325,11 +465,12 @@ def load_dmr_blocks(xlsx_path: str, cell_type_id: Optional[str] = None) -> List[
         return _load_v79(xlsx_path, cell_type_id)
     elif fmt == "block_summary":
         return _load_block_summary(xlsx_path, cell_type_id)
+    elif fmt == "v228":
+        return _load_v228(xlsx_path, cell_type_id)
     else:
         raise ValueError(
             f"Could not detect Excel format in {xlsx_path}. "
-            f"Expected either v7.9 format (sheets per cell type) or "
-            f"Block_Summary format."
+            f"Expected v7.9, Block_Summary, or v2.2.8 format."
         )
 
 

@@ -288,7 +288,8 @@ def find_wgbstools(wgbstools_path: Optional[str] = None) -> str:
     Priority:
         1. Explicit path provided
         2. 'wgbstools' on PATH
-        3. ./wgbs_tools/wgbstools (cloned by install_macos.sh)
+        3. .venv/bin/wgbstools (common install location)
+        4. ./wgbs_tools/wgbstools (cloned by install_macos.sh)
     """
     if wgbstools_path and os.path.isfile(wgbstools_path):
         return wgbstools_path
@@ -296,6 +297,10 @@ def find_wgbstools(wgbstools_path: Optional[str] = None) -> str:
     on_path = shutil.which('wgbstools')
     if on_path:
         return on_path
+
+    venv_bin = os.path.join(os.getcwd(), '.venv', 'bin', 'wgbstools')
+    if os.path.isfile(venv_bin) or os.path.islink(venv_bin):
+        return venv_bin
 
     local = os.path.join(os.getcwd(), 'wgbs_tools', 'wgbstools')
     if os.path.isfile(local):

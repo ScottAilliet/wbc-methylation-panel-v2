@@ -227,6 +227,10 @@ def step3_design_primers(args, converted_data=None):
     else:
         config = Primer3PlusConfig()
 
+    # Apply salt preset (e.g. roche_dlc for Roche DLC conditions)
+    config.salt_preset = args.salt_preset
+    config.__post_init__()  # Re-apply preset to update salt concentrations
+
     # Set Tm (required)
     if args.min_tm is not None:
         config.primer_min_tm = args.min_tm
@@ -234,6 +238,9 @@ def step3_design_primers(args, converted_data=None):
         config.primer_opt_tm = args.opt_tm
     if args.max_tm is not None:
         config.primer_max_tm = args.max_tm
+
+    # Set product size range
+    config.primer_product_size_range = [(args.product_size_min, args.product_size_max)]
 
     config.validate_tm()
     pipeline_config = PipelineConfig()
@@ -508,6 +515,14 @@ def main():
     parser.add_argument("--min-tm", type=float, help="Min Tm (°C) — REQUIRED")
     parser.add_argument("--opt-tm", type=float, help="Opt Tm (°C) — REQUIRED")
     parser.add_argument("--max-tm", type=float, help="Max Tm (°C) — REQUIRED")
+    parser.add_argument("--salt-preset", default="primer3plus",
+                        choices=["primer3plus", "roche_dlc"],
+                        help="Salt conditions for Tm calculation (default: primer3plus). "
+                             "Use 'roche_dlc' for Roche DLC conditions (100mM Na, 4.5mM Mg).")
+    parser.add_argument("--product-size-min", type=int, default=60,
+                        help="Minimum product size in bp (default 60)")
+    parser.add_argument("--product-size-max", type=int, default=150,
+                        help="Maximum product size in bp (default 150)")
     parser.add_argument("--flank", type=int, default=100, help="Flanking bp around DMR")
     parser.add_argument("--max-blocks", type=int, help="Max blocks to process (for testing)")
     parser.add_argument("--bowtie-index-dir", help="Directory with bowtie2 indices")

@@ -45,7 +45,7 @@ SALT_PRESETS = {
         "PRIMER_SALT_DIVALENT": 4.5,       # Mg2+ mM
         "PRIMER_DNTP_CONC": 1.2,           # dNTPs mM
         "PRIMER_DNA_CONC": 250.0,          # primer nM
-        "PRIMER_SALT_CORRECTIONS": 2,      # 2 = Owczarzy 2008
+        "PRIMER_SALT_CORRECTIONS": 1,      # 1 = SantaLucia 1998 (Owczarzy not supported by design_primers)
         "PRIMER_TM_FORMULA": 1,            # 1 = SantaLucia 1998
     },
     "primer3plus": {
