@@ -312,6 +312,7 @@ def step4_bowtie(args, primers_data=None):
             p["bowtie_passes_filter"] = result.passes_filter
             p["bowtie_intended_genome"] = result.intended_genome
             p["mapping_error_note"] = result.mapping_note
+            p["mismatch_profile"] = result.mismatch_profile
         else:
             p["bowtie_passes_filter"] = None
             p["bowtie_intended_genome"] = None
@@ -437,6 +438,7 @@ def step8_xlsx(args, primers_data=None):
             primer_dimer_end_min_dg=p.get("primer_dimer_end_min_dg"),
             common_variant_score=p.get("common_variant_score"),
             mapping_error_note=p.get("mapping_error_note"),
+            mismatch_profile=p.get("mismatch_profile"),
         ))
 
     out_path = os.path.join(args.output_dir, "primer_assays.xlsx")
@@ -487,6 +489,7 @@ def step9_pdf(args, primers_data=None):
             primer_dimer_end_min_dg=p.get("primer_dimer_end_min_dg"),
             common_variant_score=p.get("common_variant_score"),
             mapping_error_note=p.get("mapping_error_note"),
+            mismatch_profile=p.get("mismatch_profile"),
         ))
 
     out_path = os.path.join(args.output_dir, "primer_assays.pdf")

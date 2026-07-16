@@ -2,19 +2,21 @@
 """
 U-assays-style XLSX output module.
 
-Generates an Excel file matching the format of U-assays_Scott-QC.xlsx:
-27 columns per primer pair, one sheet "Primer pairs".
+Generates an Excel file with orderable primer sequences and CpG annotation.
 
 Columns:
-1. assay_id, 2. seq_id, 3. template_used, 4. assay, 5. left_primer_display,
-6. right_primer_display, 7. left_tm_C, 8. right_tm_C, 9. product_size_bp,
-10. c_total_tail, 11. c_total, 12. left_c_total, 13. right_c_total,
-14. left_c_tail, 15. right_c_tail, 16. sense_meth_mismatch_score,
-17. sense_unmeth_mismatch_score, 18. anti_meth_mismatch_score,
-19. anti_unmeth_mismatch_score, 20. bowtie_passes_filter,
-21. bowtie_intended_genome, 22. left_structure_mfe_kcal_mol,
-23. right_structure_mfe_kcal_mol, 24. primer_dimer_prediction,
-25. primer_dimer_end_min_dg, 26. common_variant_score, 27. mapping_error_note
+1. assay_id, 2. seq_id, 3. template_used, 4. assay,
+5. left_primer, 6. right_primer (ORDERABLE — paste directly to order form),
+7. left_primer_cpg_display, 8. right_primer_cpg_display (CpG annotation: y=CpG C, g=CpG G),
+9. left_tm_C, 10. right_tm_C, 11. product_size_bp,
+12. c_total_tail, 13. c_total, 14. left_c_total, 15. right_c_total,
+16. left_c_tail, 17. right_c_tail,
+18. sense_meth_mismatch_score, 19. sense_unmeth_mismatch_score,
+20. anti_meth_mismatch_score, 21. anti_unmeth_mismatch_score,
+22. bowtie_passes_filter, 23. bowtie_intended_genome,
+24. left_structure_mfe_kcal_mol, 25. right_structure_mfe_kcal_mol,
+26. primer_dimer_prediction, 27. primer_dimer_end_min_dg,
+28. common_variant_score, 29. mapping_error_note
 """
 
 import os
@@ -26,14 +28,16 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from methyl_panel.phase3_primer3_design import PrimerPair
 
 
-# Column order matching U-assays reference
+# Column order — raw orderable sequences first, then CpG annotation
 COLUMNS = [
     "assay_id",
     "seq_id",
     "template_used",
     "assay",
-    "left_primer_display",
-    "right_primer_display",
+    "left_primer",
+    "right_primer",
+    "left_primer_cpg_display",
+    "right_primer_cpg_display",
     "left_tm_C",
     "right_tm_C",
     "product_size_bp",
@@ -55,6 +59,7 @@ COLUMNS = [
     "primer_dimer_end_min_dg",
     "common_variant_score",
     "mapping_error_note",
+    "mismatch_profile",
 ]
 
 
@@ -73,8 +78,10 @@ def primer_pair_to_row(p: PrimerPair) -> dict:
         "seq_id": p.seq_id,
         "template_used": p.template_used,
         "assay": assay,
-        "left_primer_display": p.left_primer_display,
-        "right_primer_display": p.right_primer_display,
+        "left_primer": p.left_primer,
+        "right_primer": p.right_primer,
+        "left_primer_cpg_display": p.left_primer_display,
+        "right_primer_cpg_display": p.right_primer_display,
         "left_tm_C": round(p.left_tm, 2),
         "right_tm_C": round(p.right_tm, 2),
         "product_size_bp": p.product_size,
@@ -96,6 +103,7 @@ def primer_pair_to_row(p: PrimerPair) -> dict:
         "primer_dimer_end_min_dg": p.primer_dimer_end_min_dg,
         "common_variant_score": p.common_variant_score,
         "mapping_error_note": p.mapping_error_note,
+        "mismatch_profile": p.mismatch_profile,
     }
 
 
@@ -160,7 +168,8 @@ def write_xlsx(primer_pairs: List[PrimerPair], output_path: str,
     # Column widths
     col_widths = {
         "assay_id": 15, "seq_id": 15, "template_used": 12, "assay": 8,
-        "left_primer_display": 28, "right_primer_display": 28,
+        "left_primer": 28, "right_primer": 28,
+        "left_primer_cpg_display": 28, "right_primer_cpg_display": 28,
         "left_tm_C": 10, "right_tm_C": 10, "product_size_bp": 12,
         "c_total_tail": 10, "c_total": 8, "left_c_total": 10, "right_c_total": 10,
         "left_c_tail": 8, "right_c_tail": 8,
@@ -170,6 +179,7 @@ def write_xlsx(primer_pairs: List[PrimerPair], output_path: str,
         "left_structure_mfe_kcal_mol": 12, "right_structure_mfe_kcal_mol": 12,
         "primer_dimer_prediction": 20, "primer_dimer_end_min_dg": 12,
         "common_variant_score": 10, "mapping_error_note": 30,
+        "mismatch_profile": 50,
     }
     for col_idx, col_name in enumerate(COLUMNS, 1):
         from openpyxl.utils import get_column_letter

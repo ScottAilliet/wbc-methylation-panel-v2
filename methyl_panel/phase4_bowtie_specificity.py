@@ -35,6 +35,7 @@ class BowtieResult:
     total_alignments: int      # Total alignments across all 6 states
     off_target_alignments: int # Alignments to non-intended states
     mapping_note: str          # Description of any issues
+    mismatch_profile: str = "" # e.g. "00200: 0 with 1 mismatch, 0 with 2 mm's, 2 with 3 mm's, 0 with 4 mms, 0 with 5 mms"
 
 
 def create_bowtie_index(genome_fasta: str, output_dir: str,
@@ -235,6 +236,9 @@ def screen_primer_pair(left_primer: str, right_primer: str,
     notes = []
     bowtie_failed = False
 
+    # Track mismatch counts (1-5) across ALL genomes for both primers combined
+    mismatch_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
     for idx_name in indices_to_check:
         idx_path = os.path.join(index_dir, idx_name)
         if not os.path.exists(idx_path + ".1.bt2"):
@@ -247,6 +251,12 @@ def screen_primer_pair(left_primer: str, right_primer: str,
             # Filter: only count alignments with few edits
             good_alignments = [a for a in alignments if a["edits"] <= max_mismatches]
             total_alignments += len(good_alignments)
+
+            # Count mismatches for profile (across all genomes, both primers)
+            for a in good_alignments:
+                e = a["edits"]
+                if 1 <= e <= 5:
+                    mismatch_counts[e] += 1
 
             if idx_name == intended_index:
                 intended_hits[primer_name] = len(good_alignments)
@@ -287,12 +297,27 @@ def screen_primer_pair(left_primer: str, right_primer: str,
 
     note = "; ".join(notes) if notes else "Unique mapping to intended genome"
 
+    # Build mismatch profile string: "00200: 0 with 1 mismatch, 0 with 2 mm's, 2 with 3 mm's, 0 with 4 mms, 0 with 5 mms"
+    compact = "".join(str(mismatch_counts[i]) for i in range(1, 6))
+    parts = []
+    for i in range(1, 6):
+        mm_label = "mismatch" if i == 1 else "mm's"
+        mms_label = "mms"
+        if i == 1:
+            parts.append(f"{mismatch_counts[i]} with 1 mismatch")
+        elif i <= 4:
+            parts.append(f"{mismatch_counts[i]} with {i} mm's")
+        else:
+            parts.append(f"{mismatch_counts[i]} with {i} mms")
+    mismatch_profile = f"{compact}: " + ", ".join(parts)
+
     return BowtieResult(
         passes_filter=passes,
         intended_genome=intended_index,
         total_alignments=total_alignments,
         off_target_alignments=off_target,
         mapping_note=note,
+        mismatch_profile=mismatch_profile,
     )
 
 
