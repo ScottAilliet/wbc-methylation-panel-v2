@@ -304,7 +304,10 @@ def step4_bowtie(args, primers_data=None):
             primers_data = json.load(f)
 
     if args.bowtie_index_dir and os.path.exists(args.bowtie_index_dir):
-        primers_data = screen_primer_pairs_batch(primers_data, args.bowtie_index_dir)
+        primers_data = screen_primer_pairs_batch(
+            primers_data, args.bowtie_index_dir,
+            product_size_min=args.product_size_min,
+            product_size_max=args.product_size_max)
     else:
         for p in primers_data:
             p["bowtie_passes_filter"] = None

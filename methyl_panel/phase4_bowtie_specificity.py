@@ -317,7 +317,9 @@ def screen_primer_pair(left_primer: str, right_primer: str,
 
 
 def screen_primer_pairs_batch(primers_data: list, index_dir: str,
-                               max_mismatches: int = 3) -> list:
+                               max_mismatches: int = 3,
+                               product_size_min: int = 40,
+                               product_size_max: int = 150) -> list:
     """
     Screen ALL primer pairs in batch — runs bowtie2 only 3 times total
     (once per genome index) instead of 6 times per primer pair.
@@ -401,7 +403,8 @@ def screen_primer_pairs_batch(primers_data: list, index_dir: str,
             all_alignments[idx_name] = {"left": left_aln, "right": right_aln}
 
         result = _evaluate_screening(all_alignments, intended_index,
-                                      indices_to_check, max_mismatches)
+                                      indices_to_check, max_mismatches,
+                                      product_size_min, product_size_max)
 
         p["bowtie_passes_filter"] = result.passes_filter
         p["bowtie_intended_genome"] = result.intended_genome
@@ -413,86 +416,145 @@ def screen_primer_pairs_batch(primers_data: list, index_dir: str,
 
 
 def _evaluate_screening(all_alignments: dict, intended_index: str,
-                         indices_to_check: list, max_mismatches: int) -> BowtieResult:
+                         indices_to_check: list, max_mismatches: int,
+                         product_size_min: int = 40, product_size_max: int = 150) -> BowtieResult:
     """
-    Evaluate screening results from pre-computed alignments.
+    Evaluate screening results using PAIR-LEVEL specificity.
+
+    A single bisulfite-converted primer (A/T-rich, ~20bp) will match many places
+    in the 3-billion-bp genome. That's expected and not a problem. What matters
+    for PCR/dPCR is whether the PAIR (left + right) can form an amplicon — i.e.,
+    both primers align to the same genome location within product-size distance,
+    in convergent orientation (left on forward, right on reverse).
+
+    Pass criteria:
+    1. The pair amplifies at the intended genome (both primers map there)
+    2. The pair does NOT amplify at any off-target genome
+    3. The pair amplifies uniquely at the intended genome (only 1 amplicon)
+    4. Bowtie2 didn't fail
 
     Args:
         all_alignments: {idx_name: {"left": [alignments], "right": [alignments]}}
         intended_index: Which genome index is the intended one
         indices_to_check: List of all index names to check
         max_mismatches: Maximum mismatches (edits) allowed for a hit to count
+        product_size_min: Min amplicon size for pair-level check
+        product_size_max: Max amplicon size for pair-level check
 
     Returns:
         BowtieResult with pass/fail and details
     """
-    total_alignments = 0
-    off_target = 0
-    intended_hits = {"left": 0, "right": 0}
-    multi_map = {"left": 0, "right": 0}
     notes = []
     bowtie_failed = False
 
     # Track mismatch counts (0-5) across ALL genomes for both primers combined
-    # 0 = perfect match, 1-5 = mismatches
     mismatch_counts = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
+    # Count total alignments for mismatch profile
+    total_alignments = 0
     for idx_name in indices_to_check:
         if idx_name not in all_alignments:
-            notes.append(f"Index {idx_name} not found, skipping")
             continue
-
         for primer_name in ("left", "right"):
-            alignments = all_alignments[idx_name][primer_name]
+            for a in all_alignments[idx_name][primer_name]:
+                if a["edits"] <= max_mismatches:
+                    total_alignments += 1
+                    e = a["edits"]
+                    if 0 <= e <= 5:
+                        mismatch_counts[e] += 1
 
-            # Filter: only count alignments with few edits
-            good_alignments = [a for a in alignments if a["edits"] <= max_mismatches]
-            total_alignments += len(good_alignments)
-
-            # Count mismatches for profile (across all genomes, both primers)
-            for a in good_alignments:
-                e = a["edits"]
-                if 0 <= e <= 5:
-                    mismatch_counts[e] += 1
-
-            if idx_name == intended_index:
-                intended_hits[primer_name] = len(good_alignments)
-                if len(good_alignments) > 1:
-                    multi_map[primer_name] = len(good_alignments)
-            elif good_alignments:
-                off_target += len(good_alignments)
-                notes.append(f"{primer_name} primer has {len(good_alignments)} off-target hits in {idx_name}")
-
-    # Check for bowtie2 failure (no hits anywhere = likely bowtie2 error)
+    # Check for bowtie2 failure (no hits anywhere)
     if total_alignments == 0:
         notes.append("WARNING: No alignments found in any genome — possible bowtie2 error")
         bowtie_failed = True
 
-    # Check that both primers mapped to intended genome
-    if intended_hits["left"] == 0:
-        notes.append("Left primer did not map to intended genome")
-    if intended_hits["right"] == 0:
-        notes.append("Right primer did not map to intended genome")
+    # ── Pair-level specificity: count amplicons per genome index ──
+    # An amplicon forms when left primer maps forward and right primer maps reverse
+    # at the same chromosome, with right primer start within product_size range
+    # after left primer start.
+    #
+    # bowtie2 SAM flags:
+    #   0 = forward strand, 16 = reverse strand
+    # For a valid PCR pair: left primer on forward (flag 0), right primer on reverse (flag 16)
+    # Left primer position = pos, Right primer position = pos (start of alignment on reference)
+    # Amplicon size = right_pos + right_len - left_pos
 
-    # Check for multi-mapping within intended genome
-    if multi_map["left"]:
-        notes.append(f"Left primer maps to {multi_map['left']} locations in intended genome")
-    if multi_map["right"]:
-        notes.append(f"Right primer maps to {multi_map['right']} locations in intended genome")
+    amplicons_per_genome = {}  # {idx_name: [(chrom, left_pos, amplicon_size, left_edits, right_edits)]}
+
+    for idx_name in indices_to_check:
+        if idx_name not in all_alignments:
+            continue
+
+        left_alignments = [a for a in all_alignments[idx_name]["left"] if a["edits"] <= max_mismatches]
+        right_alignments = [a for a in all_alignments[idx_name]["right"] if a["edits"] <= max_mismatches]
+
+        # Build lookup: {chrom: [(pos, flag, edits, len), ...]} for each primer
+        left_by_chrom = {}
+        for a in left_alignments:
+            chrom = a["rname"]
+            if chrom not in left_by_chrom:
+                left_by_chrom[chrom] = []
+            left_by_chrom[chrom].append(a)
+
+        right_by_chrom = {}
+        for a in right_alignments:
+            chrom = a["rname"]
+            if chrom not in right_by_chrom:
+                right_by_chrom[chrom] = []
+            right_by_chrom[chrom].append(a)
+
+        # Find pairs: left on forward (flag & 16 == 0), right on reverse (flag & 16 != 0)
+        # within product_size range
+        amplicons = []
+        for chrom in set(left_by_chrom.keys()) & set(right_by_chrom.keys()):
+            for la in left_by_chrom[chrom]:
+                if la["flag"] & 16:  # left primer should be forward
+                    continue
+                left_pos = la["pos"]
+                left_len = len(la["seq"])
+
+                for ra in right_by_chrom[chrom]:
+                    if not (ra["flag"] & 16):  # right primer should be reverse
+                        continue
+                    right_pos = ra["pos"]
+                    right_len = len(ra["seq"])
+
+                    # Amplicon size = (right_pos + right_len) - left_pos
+                    amplicon_size = (right_pos + right_len) - left_pos
+
+                    if product_size_min <= amplicon_size <= product_size_max:
+                        amplicons.append((chrom, left_pos, amplicon_size,
+                                         la["edits"], ra["edits"]))
+
+        amplicons_per_genome[idx_name] = amplicons
+
+    # ── Evaluate pass/fail based on pair-level amplicons ──
+    intended_amplicons = amplicons_per_genome.get(intended_index, [])
+    off_target_amplicons = 0
+
+    for idx_name in indices_to_check:
+        if idx_name == intended_index:
+            continue
+        amps = amplicons_per_genome.get(idx_name, [])
+        if amps:
+            off_target_amplicons += len(amps)
+            notes.append(f"Pair amplifies {len(amps)} off-target product(s) in {idx_name}")
+
+    if len(intended_amplicons) == 0:
+        notes.append("Pair does not amplify in intended genome")
+    elif len(intended_amplicons) > 1:
+        notes.append(f"Pair amplifies {len(intended_amplicons)} products in intended genome (multi-amplicon)")
 
     # Pass criteria:
-    # 1. No off-target alignments
-    # 2. Both primers map to intended genome
-    # 3. No multi-mapping (each primer maps uniquely in intended genome)
+    # 1. Pair amplifies at intended genome (at least 1 amplicon)
+    # 2. No off-target amplicons in any other genome
+    # 3. Only 1 amplicon at intended genome (unique)
     # 4. Bowtie2 didn't fail
-    passes = (off_target == 0
-              and intended_hits["left"] >= 1
-              and intended_hits["right"] >= 1
-              and multi_map["left"] <= 1
-              and multi_map["right"] <= 1
+    passes = (len(intended_amplicons) == 1
+              and off_target_amplicons == 0
               and not bowtie_failed)
 
-    note = "; ".join(notes) if notes else "Unique mapping to intended genome"
+    note = "; ".join(notes) if notes else "Unique amplification at intended genome"
 
     # Build mismatch profile: compact code only (6 digits: 0mm, 1mm, 2mm, 3mm, 4mm, 5mm)
     compact = "".join(str(mismatch_counts[i]) for i in range(0, 6))
@@ -514,7 +576,7 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
         passes_filter=passes,
         intended_genome=intended_index,
         total_alignments=total_alignments,
-        off_target_alignments=off_target,
+        off_target_alignments=off_target_amplicons,
         mapping_note=note,
         mismatch_profile=compact,
         mismatch_detail=mismatch_detail,
