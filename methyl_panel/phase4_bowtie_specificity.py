@@ -431,8 +431,9 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
     notes = []
     bowtie_failed = False
 
-    # Track mismatch counts (1-5) across ALL genomes for both primers combined
-    mismatch_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    # Track mismatch counts (0-5) across ALL genomes for both primers combined
+    # 0 = perfect match, 1-5 = mismatches
+    mismatch_counts = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
     for idx_name in indices_to_check:
         if idx_name not in all_alignments:
@@ -449,7 +450,7 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
             # Count mismatches for profile (across all genomes, both primers)
             for a in good_alignments:
                 e = a["edits"]
-                if 1 <= e <= 5:
+                if 0 <= e <= 5:
                     mismatch_counts[e] += 1
 
             if idx_name == intended_index:
@@ -492,10 +493,13 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
     note = "; ".join(notes) if notes else "Unique mapping to intended genome"
 
     # Build mismatch profile string
-    compact = "".join(str(mismatch_counts[i]) for i in range(1, 6))
+    # 6-digit compact code: 0mm, 1mm, 2mm, 3mm, 4mm, 5mm
+    compact = "".join(str(mismatch_counts[i]) for i in range(0, 6))
     parts = []
-    for i in range(1, 6):
-        if i == 1:
+    for i in range(0, 6):
+        if i == 0:
+            parts.append(f"{mismatch_counts[i]} with 0 mismatches (perfect)")
+        elif i == 1:
             parts.append(f"{mismatch_counts[i]} with 1 mismatch")
         elif i <= 4:
             parts.append(f"{mismatch_counts[i]} with {i} mm's")

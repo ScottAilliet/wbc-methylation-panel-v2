@@ -166,7 +166,7 @@ class Primer3PlusConfig:
     primer_pick_left_primer: int = 1
     primer_pick_right_primer: int = 1
     primer_pick_internal_oligo: int = 0
-    primer_num_return: int = 10
+    primer_num_return: int = 200  # Return all valid pairs (was 10)
     # Product size range as a list of (min, max) tuples
     primer_product_size_range: List[tuple] = field(
         default_factory=lambda: [(60, 150)]
@@ -953,7 +953,7 @@ class PipelineConfig:
     top_n_markers: int = 1000
     sort_by: str = "delta_means"
     threads: int = 8
-    max_primers_per_block: int = 10  # cap primer pairs returned per block per template
+    max_primers_per_block: int = 200  # cap primer pairs returned per block per template (was 10)
     min_cpg_per_primer: int = 2       # min CpGs in at least one primer of the pair
     min_cpg_pair_total: int = 4       # min total CpGs across both primers
 
