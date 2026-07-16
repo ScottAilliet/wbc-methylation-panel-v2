@@ -92,6 +92,7 @@ class PrimerPair:
     common_variant_score: Optional[int] = None
     mapping_error_note: Optional[str] = None
     mismatch_profile: Optional[str] = None
+    mismatch_detail: Optional[str] = None
 
 
 def count_cpgs_by_position(cpg_positions: List[int], template_len: int,

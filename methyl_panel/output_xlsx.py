@@ -60,6 +60,7 @@ COLUMNS = [
     "common_variant_score",
     "mapping_error_note",
     "mismatch_profile",
+    "mismatch_detail",
 ]
 
 
@@ -104,6 +105,7 @@ def primer_pair_to_row(p: PrimerPair) -> dict:
         "common_variant_score": p.common_variant_score,
         "mapping_error_note": p.mapping_error_note,
         "mismatch_profile": p.mismatch_profile,
+        "mismatch_detail": p.mismatch_detail,
     }
 
 
@@ -179,7 +181,8 @@ def write_xlsx(primer_pairs: List[PrimerPair], output_path: str,
         "left_structure_mfe_kcal_mol": 12, "right_structure_mfe_kcal_mol": 12,
         "primer_dimer_prediction": 20, "primer_dimer_end_min_dg": 12,
         "common_variant_score": 10, "mapping_error_note": 30,
-        "mismatch_profile": 50,
+        "mismatch_profile": 12,
+        "mismatch_detail": 50,
     }
     for col_idx, col_name in enumerate(COLUMNS, 1):
         from openpyxl.utils import get_column_letter

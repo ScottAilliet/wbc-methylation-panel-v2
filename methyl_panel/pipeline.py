@@ -311,6 +311,7 @@ def step4_bowtie(args, primers_data=None):
             p["bowtie_intended_genome"] = None
             p["mapping_error_note"] = "Bowtie index not available"
             p["mismatch_profile"] = ""
+            p["mismatch_detail"] = ""
 
     out_path = os.path.join(args.output_dir, "primers.json")
     with open(out_path, 'w') as f:
@@ -433,6 +434,7 @@ def step8_xlsx(args, primers_data=None):
             common_variant_score=p.get("common_variant_score"),
             mapping_error_note=p.get("mapping_error_note"),
             mismatch_profile=p.get("mismatch_profile"),
+            mismatch_detail=p.get("mismatch_detail"),
         ))
 
     out_path = os.path.join(args.output_dir, "primer_assays.xlsx")
@@ -484,6 +486,7 @@ def step9_pdf(args, primers_data=None):
             common_variant_score=p.get("common_variant_score"),
             mapping_error_note=p.get("mapping_error_note"),
             mismatch_profile=p.get("mismatch_profile"),
+            mismatch_detail=p.get("mismatch_detail"),
         ))
 
     out_path = os.path.join(args.output_dir, "primer_assays.pdf")

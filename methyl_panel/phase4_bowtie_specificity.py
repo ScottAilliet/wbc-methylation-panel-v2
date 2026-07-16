@@ -35,7 +35,8 @@ class BowtieResult:
     total_alignments: int      # Total alignments across all 6 states
     off_target_alignments: int # Alignments to non-intended states
     mapping_note: str          # Description of any issues
-    mismatch_profile: str = "" # e.g. "00200: 0 with 1 mismatch, 0 with 2 mm's, 2 with 3 mm's, 0 with 4 mms, 0 with 5 mms"
+    mismatch_profile: str = "" # compact 6-digit code: 0mm,1mm,2mm,3mm,4mm,5mm
+    mismatch_detail: str = ""  # human-readable description
 
 
 def create_bowtie_index(genome_fasta: str, output_dir: str,
@@ -406,6 +407,7 @@ def screen_primer_pairs_batch(primers_data: list, index_dir: str,
         p["bowtie_intended_genome"] = result.intended_genome
         p["mapping_error_note"] = result.mapping_note
         p["mismatch_profile"] = result.mismatch_profile
+        p["mismatch_detail"] = result.mismatch_detail
 
     return primers_data
 
@@ -492,9 +494,10 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
 
     note = "; ".join(notes) if notes else "Unique mapping to intended genome"
 
-    # Build mismatch profile string
-    # 6-digit compact code: 0mm, 1mm, 2mm, 3mm, 4mm, 5mm
+    # Build mismatch profile: compact code only (6 digits: 0mm, 1mm, 2mm, 3mm, 4mm, 5mm)
     compact = "".join(str(mismatch_counts[i]) for i in range(0, 6))
+
+    # Build human-readable description (separate field)
     parts = []
     for i in range(0, 6):
         if i == 0:
@@ -505,7 +508,7 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
             parts.append(f"{mismatch_counts[i]} with {i} mm's")
         else:
             parts.append(f"{mismatch_counts[i]} with {i} mms")
-    mismatch_profile = f"{compact}: " + ", ".join(parts)
+    mismatch_detail = ", ".join(parts)
 
     return BowtieResult(
         passes_filter=passes,
@@ -513,7 +516,8 @@ def _evaluate_screening(all_alignments: dict, intended_index: str,
         total_alignments=total_alignments,
         off_target_alignments=off_target,
         mapping_note=note,
-        mismatch_profile=mismatch_profile,
+        mismatch_profile=compact,
+        mismatch_detail=mismatch_detail,
     )
 
 
