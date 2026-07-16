@@ -294,8 +294,8 @@ def step3_design_primers(args, converted_data=None):
 
 
 def step4_bowtie(args, primers_data=None):
-    """Step 4: Bowtie2 specificity screening."""
-    from methyl_panel.phase4_bowtie_specificity import screen_primer_pair
+    """Step 4: Bowtie2 specificity screening (batch mode — memory efficient)."""
+    from methyl_panel.phase4_bowtie_specificity import screen_primer_pairs_batch
 
     print("\n=== Step 4: Bowtie2 specificity screening ===")
     if primers_data is None:
@@ -303,20 +303,14 @@ def step4_bowtie(args, primers_data=None):
         with open(path) as f:
             primers_data = json.load(f)
 
-    for p in primers_data:
-        if args.bowtie_index_dir and os.path.exists(args.bowtie_index_dir):
-            result = screen_primer_pair(
-                p["left_primer"], p["right_primer"],
-                p["template_used"], args.bowtie_index_dir
-            )
-            p["bowtie_passes_filter"] = result.passes_filter
-            p["bowtie_intended_genome"] = result.intended_genome
-            p["mapping_error_note"] = result.mapping_note
-            p["mismatch_profile"] = result.mismatch_profile
-        else:
+    if args.bowtie_index_dir and os.path.exists(args.bowtie_index_dir):
+        primers_data = screen_primer_pairs_batch(primers_data, args.bowtie_index_dir)
+    else:
+        for p in primers_data:
             p["bowtie_passes_filter"] = None
             p["bowtie_intended_genome"] = None
             p["mapping_error_note"] = "Bowtie index not available"
+            p["mismatch_profile"] = ""
 
     out_path = os.path.join(args.output_dir, "primers.json")
     with open(out_path, 'w') as f:

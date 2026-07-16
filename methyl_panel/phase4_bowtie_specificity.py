@@ -114,7 +114,10 @@ def create_bowtie_index(genome_fasta: str, output_dir: str,
 def align_primer_bowtie2(primer_seq: str, index_prefix: str,
                          max_mismatches: int = 3) -> List[dict]:
     """
-    Align a primer against a bowtie2 index.
+    Align a single primer against a bowtie2 index.
+
+    .. deprecated:: Use batch_align_primers_bowtie2 for efficiency.
+    Kept for backward compatibility / single-primer testing.
 
     Args:
         primer_seq: Primer sequence
@@ -123,40 +126,118 @@ def align_primer_bowtie2(primer_seq: str, index_prefix: str,
 
     Returns:
         List of alignment dictionaries with parsed SAM fields.
-        Returns empty list if bowtie2 fails or finds no hits.
     """
-    # Create a FASTA file for the primer
     with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as tmp:
         tmp.write(f">primer\n{primer_seq}\n")
         tmp_path = tmp.name
 
     try:
-        # Bowtie2 settings for short primer screening:
-        # --end-to-end: require full-length alignment (no soft clipping)
-        # -N 1: allow 1 mismatch in seed (bowtie2 max is 1, NOT 2)
-        # -L 10: seed length (short for 18-23bp primers)
-        # -a: report all alignments
-        # --score-min L,-6,-6: allow up to ~3 mismatches for 20bp primers
         cmd = [
             "bowtie2",
             "-x", index_prefix,
             "-f", tmp_path,
             "--end-to-end",
-            "-N", "1",               # Max 1 seed mismatch (bowtie2 limit)
-            "-L", "10",              # Short seed for short primers
-            "-a",                    # Report all alignments
-            "--no-hd",               # No header lines
-            "--no-unal",             # Don't print unaligned reads
-            "--score-min", "L,-6,-6",  # Allow up to ~3 mismatches
+            "-N", "1",
+            "-L", "10",
+            "-k", "100",             # Cap at 100 alignments (not -a which is unlimited)
+            "--no-hd",
+            "--no-unal",
+            "--score-min", "L,-6,-6",
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
-        # If bowtie2 failed, return empty (caller should check for this)
         if result.returncode != 0:
             return []
 
-        alignments = []
+        return _parse_sam_lines(result.stdout)
+    except (subprocess.TimeoutExpired, Exception):
+        return []
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _parse_sam_lines(sam_text: str) -> List[dict]:
+    """Parse SAM output lines into alignment dicts."""
+    alignments = []
+    for line in sam_text.strip().split("\n"):
+        if not line or line.startswith("@"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 11:
+            continue
+
+        nm = 0
+        as_score = 0
+        for tag in parts[11:]:
+            if tag.startswith("NM:i:"):
+                nm = int(tag.split(":")[2])
+            elif tag.startswith("AS:i:"):
+                as_score = int(tag.split(":")[2])
+
+        alignments.append({
+            "read": parts[0],
+            "flag": int(parts[1]),
+            "rname": parts[2],
+            "pos": int(parts[3]),
+            "mapq": int(parts[4]),
+            "cigar": parts[5],
+            "seq": parts[9],
+            "edits": nm,
+            "as_score": as_score,
+        })
+    return alignments
+
+
+def batch_align_primers_bowtie2(primer_seqs: List[str], index_prefix: str,
+                                 max_mismatches: int = 3) -> dict:
+    """
+    Align ALL primers against a bowtie2 index in a SINGLE bowtie2 invocation.
+
+    This is the memory-efficient replacement for calling align_primer_bowtie2
+    in a loop. Instead of spawning one bowtie2 process per primer (each loading
+    the ~4GB index), we write all primers to one FASTA and run bowtie2 once.
+
+    Args:
+        primer_seqs: List of primer sequences
+        index_prefix: Path to bowtie2 index prefix
+        max_mismatches: Maximum allowed mismatches (edits)
+
+    Returns:
+        Dict mapping {primer_index: [alignment_dicts]}
+    """
+    if not primer_seqs:
+        return {}
+
+    # Write all primers to one FASTA file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.fa', delete=False) as tmp:
+        for i, seq in enumerate(primer_seqs):
+            tmp.write(f">primer_{i}\n{seq}\n")
+        tmp_path = tmp.name
+
+    try:
+        cmd = [
+            "bowtie2",
+            "-x", index_prefix,
+            "-f", tmp_path,
+            "--end-to-end",
+            "-N", "1",
+            "-L", "10",
+            "-k", "100",             # Cap at 100 alignments per primer
+            "--no-hd",
+            "--no-unal",
+            "--score-min", "L,-6,-6",
+            "--threads", "1",        # Single thread — we're I/O bound, not CPU
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+        if result.returncode != 0:
+            return {}
+
+        # Parse SAM output and group by primer index
+        results = {}
         for line in result.stdout.strip().split("\n"):
             if not line or line.startswith("@"):
                 continue
@@ -164,7 +245,13 @@ def align_primer_bowtie2(primer_seq: str, index_prefix: str,
             if len(parts) < 11:
                 continue
 
-            # Parse optional fields (SAM tags) properly
+            # Extract primer index from read name (primer_0, primer_1, etc.)
+            read_name = parts[0]
+            try:
+                primer_idx = int(read_name.split("_")[-1])
+            except (ValueError, IndexError):
+                continue
+
             nm = 0
             as_score = 0
             for tag in parts[11:]:
@@ -173,21 +260,24 @@ def align_primer_bowtie2(primer_seq: str, index_prefix: str,
                 elif tag.startswith("AS:i:"):
                     as_score = int(tag.split(":")[2])
 
-            alignments.append({
-                "read": parts[0],
+            if primer_idx not in results:
+                results[primer_idx] = []
+
+            results[primer_idx].append({
+                "read": read_name,
                 "flag": int(parts[1]),
                 "rname": parts[2],
                 "pos": int(parts[3]),
                 "mapq": int(parts[4]),
                 "cigar": parts[5],
                 "seq": parts[9],
-                "edits": nm,           # NM = number of mismatches
-                "as_score": as_score,  # Alignment score
+                "edits": nm,
+                "as_score": as_score,
             })
 
-        return alignments
+        return results
     except (subprocess.TimeoutExpired, Exception):
-        return []
+        return {}
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -198,37 +288,142 @@ def screen_primer_pair(left_primer: str, right_primer: str,
                        index_dir: str,
                        max_mismatches: int = 3) -> BowtieResult:
     """
-    Screen a primer pair against all genome states.
+    Screen a single primer pair (calls bowtie2 per primer — slow, memory-heavy).
 
-    A primer pair PASSES if:
-    1. Both primers map to the intended genome (at least 1 hit each)
-    2. No off-target alignments to non-intended genome states
-    3. No multi-mapping within the intended genome (each primer maps uniquely)
+    .. deprecated:: Use screen_primer_pairs_batch for efficiency.
+    Kept for backward compatibility / single-primer testing.
+    """
+    state_to_index = {
+        "SM": "converted_methylated", "AM": "converted_methylated",
+        "SU": "converted_unmethylated", "AU": "converted_unmethylated",
+        "S": "unconverted", "A": "unconverted",
+    }
+    intended_index = state_to_index.get(intended_state, "unconverted")
+    indices_to_check = ["unconverted", "converted_unmethylated", "converted_methylated"]
+
+    # Collect all alignments for this pair
+    all_alignments = {}  # {idx_name: {"left": [alignments], "right": [alignments]}}
+    for idx_name in indices_to_check:
+        idx_path = os.path.join(index_dir, idx_name)
+        if not os.path.exists(idx_path + ".1.bt2"):
+            all_alignments[idx_name] = {"left": [], "right": []}
+            continue
+        left_aln = align_primer_bowtie2(left_primer, idx_path, max_mismatches)
+        right_aln = align_primer_bowtie2(right_primer, idx_path, max_mismatches)
+        all_alignments[idx_name] = {"left": left_aln, "right": right_aln}
+
+    return _evaluate_screening(all_alignments, intended_index, indices_to_check, max_mismatches)
+
+
+def screen_primer_pairs_batch(primers_data: list, index_dir: str,
+                               max_mismatches: int = 3) -> list:
+    """
+    Screen ALL primer pairs in batch — runs bowtie2 only 3 times total
+    (once per genome index) instead of 6 times per primer pair.
+
+    This is the memory-efficient replacement for calling screen_primer_pair
+    in a loop. It:
+    1. Collects all unique primer sequences
+    2. Writes them to one FASTA per genome index
+    3. Runs bowtie2 once per index (3 total, not 6×N)
+    4. Parses results back and evaluates each primer pair
 
     Args:
-        left_primer: Left primer sequence
-        right_primer: Right primer sequence
-        intended_state: Which state the primers were designed for
-                        (SM, AM, SU, AU, S, A)
+        primers_data: List of primer dicts (from primers.json)
         index_dir: Directory containing bowtie2 indices
+        max_mismatches: Maximum mismatches (edits) allowed
+
+    Returns:
+        Updated primers_data with bowtie fields populated
+    """
+    indices_to_check = ["unconverted", "converted_unmethylated", "converted_methylated"]
+
+    # Check which indices exist
+    available_indices = []
+    for idx_name in indices_to_check:
+        idx_path = os.path.join(index_dir, idx_name)
+        if os.path.exists(idx_path + ".1.bt2"):
+            available_indices.append(idx_name)
+
+    if not available_indices:
+        for p in primers_data:
+            p["bowtie_passes_filter"] = None
+            p["bowtie_intended_genome"] = None
+            p["mapping_error_note"] = "Bowtie index not available"
+            p["mismatch_profile"] = ""
+        return primers_data
+
+    # Collect all unique primer sequences (left + right from all pairs)
+    # Use a dict to deduplicate — many primers share sequences across pairs
+    seq_to_id = {}
+    all_seqs = []
+    for p in primers_data:
+        for side in ("left_primer", "right_primer"):
+            seq = p[side]
+            if seq not in seq_to_id:
+                seq_to_id[seq] = len(all_seqs)
+                all_seqs.append(seq)
+
+    print(f"  Bowtie2 batch: {len(primers_data)} pairs, {len(all_seqs)} unique primers, "
+          f"{len(available_indices)} indices")
+
+    # Run bowtie2 once per index with ALL primers in one FASTA
+    # Results: {idx_name: {seq_id: [alignment_dicts]}}
+    batch_results = {}
+    for idx_name in available_indices:
+        idx_path = os.path.join(index_dir, idx_name)
+        print(f"  Aligning vs {idx_name}...")
+        results = batch_align_primers_bowtie2(all_seqs, idx_path, max_mismatches)
+        # Map back from index to sequence
+        batch_results[idx_name] = {}
+        for seq_idx, alignments in results.items():
+            seq = all_seqs[seq_idx]
+            batch_results[idx_name][seq] = alignments
+
+    # Now evaluate each primer pair using pre-computed alignments
+    state_to_index = {
+        "SM": "converted_methylated", "AM": "converted_methylated",
+        "SU": "converted_unmethylated", "AU": "converted_unmethylated",
+        "S": "unconverted", "A": "unconverted",
+    }
+
+    for p in primers_data:
+        intended_index = state_to_index.get(p["template_used"], "unconverted")
+        left_seq = p["left_primer"]
+        right_seq = p["right_primer"]
+
+        # Collect alignments for this pair from batch results
+        all_alignments = {}
+        for idx_name in indices_to_check:
+            left_aln = batch_results.get(idx_name, {}).get(left_seq, [])
+            right_aln = batch_results.get(idx_name, {}).get(right_seq, [])
+            all_alignments[idx_name] = {"left": left_aln, "right": right_aln}
+
+        result = _evaluate_screening(all_alignments, intended_index,
+                                      indices_to_check, max_mismatches)
+
+        p["bowtie_passes_filter"] = result.passes_filter
+        p["bowtie_intended_genome"] = result.intended_genome
+        p["mapping_error_note"] = result.mapping_note
+        p["mismatch_profile"] = result.mismatch_profile
+
+    return primers_data
+
+
+def _evaluate_screening(all_alignments: dict, intended_index: str,
+                         indices_to_check: list, max_mismatches: int) -> BowtieResult:
+    """
+    Evaluate screening results from pre-computed alignments.
+
+    Args:
+        all_alignments: {idx_name: {"left": [alignments], "right": [alignments]}}
+        intended_index: Which genome index is the intended one
+        indices_to_check: List of all index names to check
         max_mismatches: Maximum mismatches (edits) allowed for a hit to count
 
     Returns:
         BowtieResult with pass/fail and details
     """
-    # Map intended state to genome index
-    state_to_index = {
-        "SM": "converted_methylated",
-        "AM": "converted_methylated",
-        "SU": "converted_unmethylated",
-        "AU": "converted_unmethylated",
-        "S": "unconverted",
-        "A": "unconverted",
-    }
-
-    intended_index = state_to_index.get(intended_state, "unconverted")
-    indices_to_check = ["unconverted", "converted_unmethylated", "converted_methylated"]
-
     total_alignments = 0
     off_target = 0
     intended_hits = {"left": 0, "right": 0}
@@ -240,13 +435,12 @@ def screen_primer_pair(left_primer: str, right_primer: str,
     mismatch_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
     for idx_name in indices_to_check:
-        idx_path = os.path.join(index_dir, idx_name)
-        if not os.path.exists(idx_path + ".1.bt2"):
+        if idx_name not in all_alignments:
             notes.append(f"Index {idx_name} not found, skipping")
             continue
 
-        for primer_name, primer_seq in [("left", left_primer), ("right", right_primer)]:
-            alignments = align_primer_bowtie2(primer_seq, idx_path, max_mismatches)
+        for primer_name in ("left", "right"):
+            alignments = all_alignments[idx_name][primer_name]
 
             # Filter: only count alignments with few edits
             good_alignments = [a for a in alignments if a["edits"] <= max_mismatches]
@@ -297,12 +491,10 @@ def screen_primer_pair(left_primer: str, right_primer: str,
 
     note = "; ".join(notes) if notes else "Unique mapping to intended genome"
 
-    # Build mismatch profile string: "00200: 0 with 1 mismatch, 0 with 2 mm's, 2 with 3 mm's, 0 with 4 mms, 0 with 5 mms"
+    # Build mismatch profile string
     compact = "".join(str(mismatch_counts[i]) for i in range(1, 6))
     parts = []
     for i in range(1, 6):
-        mm_label = "mismatch" if i == 1 else "mm's"
-        mms_label = "mms"
         if i == 1:
             parts.append(f"{mismatch_counts[i]} with 1 mismatch")
         elif i <= 4:
